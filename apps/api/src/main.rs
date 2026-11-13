@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -626,13 +626,13 @@ async fn send_direct_message(
         .clone()
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
+    if !valid_direct_message(&input.content) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "message_content_invalid",
+        ));
+    }
     let content = input.content.trim().to_owned();
-    if content.is_empty() {
-        return Err(error(StatusCode::BAD_REQUEST, "message_empty"));
-    }
-    if content.chars().count() > 4000 {
-        return Err(error(StatusCode::BAD_REQUEST, "message_too_long"));
-    }
     if peer_id == account_id {
         return Err(error(StatusCode::BAD_REQUEST, "cannot_message_yourself"));
     }
