@@ -64,3 +64,12 @@
 .profile-preview small,.profile-preview span{font-size:11px;color:#eee}
 .password-visibility{align-self:flex-end;border:0;background:transparent;color:#c39aff;font-size:11px;cursor:pointer;padding:0}
 .auth-card [data-password-error]:empty{display:none}
+
+/* Functional, locally persisted Discord-style preferences */
+.accent-options{display:flex;gap:10px;padding:15px 0;border-bottom:1px solid var(--line)}
+.accent-choice{width:30px;height:30px;border:2px solid transparent;border-radius:50%;cursor:pointer}
+.accent-choice.chosen{outline:2px solid var(--text);outline-offset:3px}
+.settings-action{margin:14px 0;padding:10px 14px;cursor:pointer}
+.larger-text{font-size:1.08rem}
+.larger-text .message-body,.larger-text .setting-row p,.larger-text .channel{font-size:15px}
+.reduce-motion *, .reduce-motion *::before, .reduce-motion *::after{scroll-behavior:auto!important;animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}
