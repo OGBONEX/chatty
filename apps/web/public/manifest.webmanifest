@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Chatty",
+  "short_name": "Chatty",
+  "description": "Chat with friends and build communities.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#170d28",
+  "background_color": "#10091b",
+  "icons": [
+    {
+      "src": "/chatty-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
