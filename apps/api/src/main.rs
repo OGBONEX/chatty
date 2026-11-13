@@ -78,8 +78,11 @@ fn normalize_username(value: &str) -> String {
 
 fn valid_email(value: &str) -> bool {
     value.len() <= 254
+        && value.matches('@').count() == 1
         && value.split_once('@').is_some_and(|(local, domain)| {
             !local.is_empty()
+                && !local.starts_with('.')
+                && !local.ends_with('.')
                 && domain.contains('.')
                 && !domain.starts_with('.')
                 && !domain.ends_with('.')
