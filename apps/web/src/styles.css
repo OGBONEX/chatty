@@ -53,3 +53,14 @@
 .message-gif a{font-size:10px;color:var(--muted)}
 .dm-message .message-gif img{max-width:260px}
 @media(max-width:600px){.rich-composer-wrap{margin:8px 10px 12px}.composer-popover{width:min(340px,calc(100vw - 32px))}.rich-composer textarea{font-size:16px}}
+
+/* Account and profile customization */
+.user-avatar{overflow:hidden;flex-shrink:0}
+.user-avatar img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.profile-preview{min-height:132px;padding:18px;display:flex;align-items:flex-end;gap:14px;border-radius:10px;background:linear-gradient(120deg,#38244e,#211b2b);background-size:cover;background-position:center;border:1px solid var(--line);color:#fff}
+.profile-preview-avatar{width:58px;height:58px;flex-shrink:0;display:grid;place-items:center;border-radius:50%;overflow:hidden;background:linear-gradient(135deg,#b46cff,#703bd1);border:3px solid #211b2b;font-size:24px;font-weight:800}
+.profile-preview-avatar img{width:100%;height:100%;object-fit:cover}
+.profile-preview>div:last-child{display:flex;flex-direction:column;gap:3px;text-shadow:0 1px 4px #000}
+.profile-preview small,.profile-preview span{font-size:11px;color:#eee}
+.password-visibility{align-self:flex-end;border:0;background:transparent;color:#c39aff;font-size:11px;cursor:pointer;padding:0}
+.auth-card [data-password-error]:empty{display:none}
