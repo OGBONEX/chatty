@@ -44,6 +44,18 @@ struct LoginRequest {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct ProfileUpdateRequest {
+    display_name: Option<String>,
+    bio: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ProfileResponse {
+    display_name: Option<String>,
+    bio: String,
+}
+
 #[derive(Serialize)]
 struct AccountResponse {
     id: Uuid,
@@ -285,6 +297,57 @@ async fn me(
     }))
 }
 
+async fn update_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<ProfileUpdateRequest>,
+) -> Result<Json<ProfileResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let token = bearer_token(&headers)
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
+    let display_name = input.display_name.map(|value| value.trim().to_owned());
+    let bio = input.bio.map(|value| value.trim().to_owned());
+
+    if display_name.is_none() && bio.is_none() {
+        return Err(error(StatusCode::BAD_REQUEST, "profile_fields_required"));
+    }
+    if display_name
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 32)
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "display_name_too_long"));
+    }
+    if bio.as_ref().is_some_and(|value| value.chars().count() > 280) {
+        return Err(error(StatusCode::BAD_REQUEST, "bio_too_long"));
+    }
+
+    let account_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT account_id FROM sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(hash_token(token))
+    .fetch_optional(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_session"))?;
+
+    let profile = sqlx::query_as::<_, (Option<String>, String)>(
+        "UPDATE profiles SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), updated_at = now() WHERE account_id = $1 RETURNING display_name, bio",
+    )
+    .bind(account_id)
+    .bind(display_name)
+    .bind(bio)
+    .fetch_one(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+
+    Ok(Json(ProfileResponse {
+        display_name: profile.0,
+        bio: profile.1,
+    }))
+}
+
 async fn logout(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -342,6 +405,7 @@ async fn main() {
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
+        .route("/auth/profile", axum::routing::patch(update_profile))
         .route("/auth/logout", post(logout))
         .with_state(AppState { db })
         .layer(CorsLayer::permissive())
