@@ -3,7 +3,10 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Path, Query, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::Response,
     routing::{get, post},
@@ -11,8 +14,8 @@ use axum::{
 };
 use chrono::{DateTime, Duration, Utc};
 use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Instant};
@@ -383,7 +386,6 @@ async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
-
 #[derive(Deserialize)]
 struct FriendRequestCreate {
     username: String,
@@ -448,7 +450,9 @@ async fn create_friend_request(
     headers: HeaderMap,
     Json(input): Json<FriendRequestCreate>,
 ) -> Result<(StatusCode, Json<FriendRequestView>), (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let sender_id = authenticated_account_id(&db, &headers).await?;
     let username = normalize_username(&input.username);
     if !valid_username(&username) {
@@ -478,7 +482,10 @@ async fn create_friend_request(
         return Err(error(StatusCode::CONFLICT, "already_friends"));
     }
     if existing.as_deref() == Some("pending") {
-        return Err(error(StatusCode::CONFLICT, "friend_request_already_pending"));
+        return Err(error(
+            StatusCode::CONFLICT,
+            "friend_request_already_pending",
+        ));
     }
 
     let request = sqlx::query_as::<_, FriendRequestView>(
@@ -540,7 +547,9 @@ async fn respond_friend_request(
 }
 
 async fn accept_friend_request(
-    State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     respond_friend_request(State(state), headers, Path(id), true).await
 }
@@ -579,7 +588,12 @@ async fn list_direct_messages(
     )
     .bind(account_id).bind(peer_id).fetch_one(&db).await
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
-    if !is_friend { return Err(error(StatusCode::FORBIDDEN, "direct_messages_require_friendship")); }
+    if !is_friend {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "direct_messages_require_friendship",
+        ));
+    }
     let messages = sqlx::query_as::<_, DirectMessageView>(
         "SELECT id, sender_id, recipient_id, content, created_at FROM direct_messages WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1) ORDER BY created_at DESC LIMIT 100",
     )
@@ -594,12 +608,21 @@ async fn send_direct_message(
     Path(peer_id): Path<Uuid>,
     Json(input): Json<DirectMessageCreate>,
 ) -> Result<(StatusCode, Json<DirectMessageView>), (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.clone().ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .clone()
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
     let content = input.content.trim().to_owned();
-    if content.is_empty() { return Err(error(StatusCode::BAD_REQUEST, "message_empty")); }
-    if content.chars().count() > 4000 { return Err(error(StatusCode::BAD_REQUEST, "message_too_long")); }
-    if peer_id == account_id { return Err(error(StatusCode::BAD_REQUEST, "cannot_message_yourself")); }
+    if content.is_empty() {
+        return Err(error(StatusCode::BAD_REQUEST, "message_empty"));
+    }
+    if content.chars().count() > 4000 {
+        return Err(error(StatusCode::BAD_REQUEST, "message_too_long"));
+    }
+    if peer_id == account_id {
+        return Err(error(StatusCode::BAD_REQUEST, "cannot_message_yourself"));
+    }
     let is_friend = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM friend_requests WHERE status = 'accepted' AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)))",
     )
@@ -611,31 +634,50 @@ async fn send_direct_message(
     )
     .bind(account_id).bind(peer_id).bind(content).fetch_one(&db).await
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
-    if let Ok(payload) = serde_json::to_string(&DirectMessageEvent { event: "message.created", message: DirectMessageView {
-        id: message.id, sender_id: message.sender_id, recipient_id: message.recipient_id,
-        content: message.content.clone(), created_at: message.created_at,
-    }}) {
+    if let Ok(payload) = serde_json::to_string(&DirectMessageEvent {
+        event: "message.created",
+        message: DirectMessageView {
+            id: message.id,
+            sender_id: message.sender_id,
+            recipient_id: message.recipient_id,
+            content: message.content.clone(),
+            created_at: message.created_at,
+        },
+    }) {
         let _ = state.events.send(payload);
     }
     Ok((StatusCode::CREATED, Json(message)))
 }
 
 #[derive(Serialize)]
-struct WsTicketResponse { ticket: String }
+struct WsTicketResponse {
+    ticket: String,
+}
 
 #[derive(Deserialize)]
-struct WsTicketQuery { ticket: String }
+struct WsTicketQuery {
+    ticket: String,
+}
 
 async fn create_ws_ticket(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<WsTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.as_ref().ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .as_ref()
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(db, &headers).await?;
     let ticket = Uuid::new_v4().to_string() + &Uuid::new_v4().simple().to_string();
     let mut tickets = state.ws_tickets.lock().await;
     tickets.retain(|_, (_, expires)| *expires > Instant::now());
-    tickets.insert(ticket.clone(), (account_id, Instant::now() + std::time::Duration::from_secs(60)));
+    tickets.insert(
+        ticket.clone(),
+        (
+            account_id,
+            Instant::now() + std::time::Duration::from_secs(60),
+        ),
+    );
     Ok(Json(WsTicketResponse { ticket }))
 }
 
@@ -647,13 +689,20 @@ async fn websocket_handler(
     let account_id = {
         let mut tickets = state.ws_tickets.lock().await;
         tickets.retain(|_, (_, expires)| *expires > Instant::now());
-        tickets.remove(&query.ticket).map(|(account_id, _)| account_id)
-    }.ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_or_expired_ws_ticket"))?;
+        tickets
+            .remove(&query.ticket)
+            .map(|(account_id, _)| account_id)
+    }
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_or_expired_ws_ticket"))?;
     let receiver = state.events.subscribe();
     Ok(ws.on_upgrade(move |socket| websocket_connection(socket, receiver, account_id)))
 }
 
-async fn websocket_connection(mut socket: WebSocket, mut receiver: broadcast::Receiver<String>, account_id: Uuid) {
+async fn websocket_connection(
+    mut socket: WebSocket,
+    mut receiver: broadcast::Receiver<String>,
+    account_id: Uuid,
+) {
     loop {
         tokio::select! {
             event = receiver.recv() => match event {
@@ -718,13 +767,26 @@ async fn main() {
         .route("/auth/profile", axum::routing::patch(update_profile))
         .route("/auth/logout", post(logout))
         .route("/friends", get(list_friends))
-        .route("/friends/requests", get(list_friend_requests).post(create_friend_request))
+        .route(
+            "/friends/requests",
+            get(list_friend_requests).post(create_friend_request),
+        )
         .route("/friends/requests/:id/accept", post(accept_friend_request))
-        .route("/friends/requests/:id/decline", post(decline_friend_request))
-        .route("/dm/:peer_id/messages", get(list_direct_messages).post(send_direct_message))
+        .route(
+            "/friends/requests/:id/decline",
+            post(decline_friend_request),
+        )
+        .route(
+            "/dm/:peer_id/messages",
+            get(list_direct_messages).post(send_direct_message),
+        )
         .route("/auth/ws-ticket", post(create_ws_ticket))
         .route("/ws", get(websocket_handler))
-        .with_state(AppState { db, events, ws_tickets: Arc::new(Mutex::new(HashMap::new())) })
+        .with_state(AppState {
+            db,
+            events,
+            ws_tickets: Arc::new(Mutex::new(HashMap::new())),
+        })
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
