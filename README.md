@@ -9,7 +9,10 @@ Chatty is a cross-platform community and messaging app in development. The backe
 - Login using email or username.
 - Random bearer sessions; only SHA-256 token hashes are stored.
 - Authenticated account lookup and logout/session revocation.
-- Authenticated profile editing for display name and short bio.\n- Friend requests with incoming/outgoing lists, accept/decline actions and accepted-friends listing.\n- Persistent one-to-one direct messages restricted to accepted friends.\n- Authenticated WebSocket tickets and per-user live message events.
+- Authenticated profile editing for display name and short bio.
+- Chat composer with Unicode emoji picker, Tenor GIF search handoff and inline GIF previews for approved Tenor/GIPHY media hosts. 
+- Clickable HTTP(S) links and Shift+Enter multi-line message composition.
+- Friend requests with incoming/outgoing lists, accept/decline actions and accepted-friends listing.\n- Persistent one-to-one direct messages restricted to accepted friends.\n- Authenticated WebSocket tickets and per-user live message events.
 - React registration/login screens and account settings.
 - GitHub Actions checks for Rust formatting, Clippy, Rust tests and the web production build.
 
