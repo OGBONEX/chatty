@@ -3,17 +3,20 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::State,
+    extract::{Path, Query, State, ws::{Message, WebSocket, WebSocketUpgrade}},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
+use futures_util::SinkExt;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::{env, net::SocketAddr};
+use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Instant};
+use tokio::sync::{broadcast, Mutex};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -21,6 +24,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     db: Option<PgPool>,
+    events: broadcast::Sender<String>,
+    ws_tickets: Arc<Mutex<HashMap<String, (Uuid, Instant)>>>,
 }
 
 #[derive(Serialize)]
@@ -373,6 +378,302 @@ async fn logout(
     Ok(StatusCode::NO_CONTENT)
 }
 
+
+#[derive(Deserialize)]
+struct FriendRequestCreate {
+    username: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct FriendRequestView {
+    id: Uuid,
+    sender_id: Uuid,
+    sender_username: String,
+    recipient_id: Uuid,
+    recipient_username: String,
+    status: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct FriendView {
+    id: Uuid,
+    username: String,
+    display_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DirectMessageCreate {
+    content: String,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct DirectMessageView {
+    id: Uuid,
+    sender_id: Uuid,
+    recipient_id: Uuid,
+    content: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct DirectMessageEvent {
+    event: &'static str,
+    message: DirectMessageView,
+}
+
+async fn authenticated_account_id(
+    db: &PgPool,
+    headers: &HeaderMap,
+) -> Result<Uuid, (StatusCode, Json<ErrorResponse>)> {
+    let token = bearer_token(headers)
+        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT account_id FROM sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > now()",
+    )
+    .bind(hash_token(token))
+    .fetch_optional(db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+    .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_session"))
+}
+
+async fn create_friend_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<FriendRequestCreate>,
+) -> Result<(StatusCode, Json<FriendRequestView>), (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let sender_id = authenticated_account_id(&db, &headers).await?;
+    let username = normalize_username(&input.username);
+    if !valid_username(&username) {
+        return Err(error(StatusCode::BAD_REQUEST, "invalid_username"));
+    }
+    let recipient = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, username FROM accounts WHERE username = $1",
+    )
+    .bind(&username)
+    .fetch_optional(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+    .ok_or_else(|| error(StatusCode::NOT_FOUND, "user_not_found"))?;
+    if recipient.0 == sender_id {
+        return Err(error(StatusCode::BAD_REQUEST, "cannot_friend_yourself"));
+    }
+
+    let existing = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM friend_requests WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1) ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(sender_id)
+    .bind(recipient.0)
+    .fetch_optional(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if existing.as_deref() == Some("accepted") {
+        return Err(error(StatusCode::CONFLICT, "already_friends"));
+    }
+    if existing.as_deref() == Some("pending") {
+        return Err(error(StatusCode::CONFLICT, "friend_request_already_pending"));
+    }
+
+    let request = sqlx::query_as::<_, FriendRequestView>(
+        "INSERT INTO friend_requests (sender_id, recipient_id) VALUES ($1, $2) RETURNING id, sender_id, (SELECT username FROM accounts WHERE id = sender_id) AS sender_username, recipient_id, (SELECT username FROM accounts WHERE id = recipient_id) AS recipient_username, status, created_at",
+    )
+    .bind(sender_id)
+    .bind(recipient.0)
+    .fetch_one(&db)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(db_error) = &e {
+            if db_error.code().as_deref() == Some("23505") {
+                return error(StatusCode::CONFLICT, "friend_request_already_pending");
+            }
+        }
+        error(StatusCode::INTERNAL_SERVER_ERROR, "database_error")
+    })?;
+    Ok((StatusCode::CREATED, Json(request)))
+}
+
+async fn list_friend_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<FriendRequestView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(&db, &headers).await?;
+    let requests = sqlx::query_as::<_, FriendRequestView>(
+        "SELECT fr.id, fr.sender_id, s.username AS sender_username, fr.recipient_id, r.username AS recipient_username, fr.status, fr.created_at FROM friend_requests fr JOIN accounts s ON s.id = fr.sender_id JOIN accounts r ON r.id = fr.recipient_id WHERE (fr.sender_id = $1 OR fr.recipient_id = $1) AND fr.status = 'pending' ORDER BY fr.created_at DESC",
+    )
+    .bind(account_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(requests))
+}
+
+async fn respond_friend_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(request_id): Path<Uuid>,
+    accept: bool,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let recipient_id = authenticated_account_id(&db, &headers).await?;
+    let status = if accept { "accepted" } else { "declined" };
+    let result = sqlx::query(
+        "UPDATE friend_requests SET status = $1, updated_at = now() WHERE id = $2 AND recipient_id = $3 AND status = 'pending'",
+    )
+    .bind(status)
+    .bind(request_id)
+    .bind(recipient_id)
+    .execute(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if result.rows_affected() == 0 {
+        return Err(error(StatusCode::NOT_FOUND, "pending_request_not_found"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn accept_friend_request(
+    State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    respond_friend_request(State(state), headers, Path(id), true).await
+}
+
+async fn decline_friend_request(
+    State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    respond_friend_request(State(state), headers, Path(id), false).await
+}
+
+async fn list_friends(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<FriendView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(&db, &headers).await?;
+    let friends = sqlx::query_as::<_, FriendView>(
+        "SELECT a.id, a.username, p.display_name FROM friend_requests fr JOIN accounts a ON a.id = CASE WHEN fr.sender_id = $1 THEN fr.recipient_id ELSE fr.sender_id END LEFT JOIN profiles p ON p.account_id = a.id WHERE (fr.sender_id = $1 OR fr.recipient_id = $1) AND fr.status = 'accepted' ORDER BY a.username",
+    )
+    .bind(account_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(friends))
+}
+
+async fn list_direct_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(peer_id): Path<Uuid>,
+) -> Result<Json<Vec<DirectMessageView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(&db, &headers).await?;
+    let is_friend = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM friend_requests WHERE status = 'accepted' AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)))",
+    )
+    .bind(account_id).bind(peer_id).fetch_one(&db).await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if !is_friend { return Err(error(StatusCode::FORBIDDEN, "direct_messages_require_friendship")); }
+    let messages = sqlx::query_as::<_, DirectMessageView>(
+        "SELECT id, sender_id, recipient_id, content, created_at FROM direct_messages WHERE (sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1) ORDER BY created_at DESC LIMIT 100",
+    )
+    .bind(account_id).bind(peer_id).fetch_all(&db).await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(messages.into_iter().rev().collect()))
+}
+
+async fn send_direct_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(peer_id): Path<Uuid>,
+    Json(input): Json<DirectMessageCreate>,
+) -> Result<(StatusCode, Json<DirectMessageView>), (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.clone().ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(&db, &headers).await?;
+    let content = input.content.trim().to_owned();
+    if content.is_empty() { return Err(error(StatusCode::BAD_REQUEST, "message_empty")); }
+    if content.chars().count() > 4000 { return Err(error(StatusCode::BAD_REQUEST, "message_too_long")); }
+    if peer_id == account_id { return Err(error(StatusCode::BAD_REQUEST, "cannot_message_yourself")); }
+    let is_friend = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM friend_requests WHERE status = 'accepted' AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)))",
+    )
+    .bind(account_id).bind(peer_id).fetch_one(&db).await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if !is_friend { return Err(error(StatusCode::FORBIDDEN, "direct_messages_require_friendship")); }
+    let message = sqlx::query_as::<_, DirectMessageView>(
+        "INSERT INTO direct_messages (sender_id, recipient_id, content) VALUES ($1, $2, $3) RETURNING id, sender_id, recipient_id, content, created_at",
+    )
+    .bind(account_id).bind(peer_id).bind(content).fetch_one(&db).await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if let Ok(payload) = serde_json::to_string(&DirectMessageEvent { event: "message.created", message: DirectMessageView {
+        id: message.id, sender_id: message.sender_id, recipient_id: message.recipient_id,
+        content: message.content.clone(), created_at: message.created_at,
+    }}) {
+        let _ = state.events.send(payload);
+    }
+    Ok((StatusCode::CREATED, Json(message)))
+}
+
+#[derive(Serialize)]
+struct WsTicketResponse { ticket: String }
+
+#[derive(Deserialize)]
+struct WsTicketQuery { ticket: String }
+
+async fn create_ws_ticket(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<WsTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.as_ref().ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(db, &headers).await?;
+    let ticket = Uuid::new_v4().to_string() + &Uuid::new_v4().simple().to_string();
+    let mut tickets = state.ws_tickets.lock().await;
+    tickets.retain(|_, (_, expires)| *expires > Instant::now());
+    tickets.insert(ticket.clone(), (account_id, Instant::now() + std::time::Duration::from_secs(60)));
+    Ok(Json(WsTicketResponse { ticket }))
+}
+
+async fn websocket_handler(
+    State(state): State<AppState>,
+    Query(query): Query<WsTicketQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let account_id = {
+        let mut tickets = state.ws_tickets.lock().await;
+        tickets.retain(|_, (_, expires)| *expires > Instant::now());
+        tickets.remove(&query.ticket).map(|(account_id, _)| account_id)
+    }.ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_or_expired_ws_ticket"))?;
+    let receiver = state.events.subscribe();
+    Ok(ws.on_upgrade(move |socket| websocket_connection(socket, receiver, account_id)))
+}
+
+async fn websocket_connection(mut socket: WebSocket, mut receiver: broadcast::Receiver<String>, account_id: Uuid) {
+    loop {
+        tokio::select! {
+            event = receiver.recv() => match event {
+                Ok(payload) => {
+                    let visible = serde_json::from_str::<serde_json::Value>(&payload).ok()
+                        .and_then(|value| {
+                            let message = value.get("message")?;
+                            let sender = message.get("sender_id")?.as_str()?;
+                            let recipient = message.get("recipient_id")?.as_str()?;
+                            Some(sender == account_id.to_string() || recipient == account_id.to_string())
+                        }).unwrap_or(false);
+                    if visible && socket.send(Message::Text(payload)).await.is_err() { break; }
+                },
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(_)) => break,
+                _ => {}
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -403,6 +704,7 @@ async fn main() {
     };
 
     // Permissive CORS is for local development only; configure an origin allowlist before deployment.
+    let (events, _) = broadcast::channel(512);
     let app = Router::new()
         .route("/health", get(health))
         .route("/auth/register", post(register))
@@ -410,7 +712,14 @@ async fn main() {
         .route("/auth/me", get(me))
         .route("/auth/profile", axum::routing::patch(update_profile))
         .route("/auth/logout", post(logout))
-        .with_state(AppState { db })
+        .route("/friends", get(list_friends))
+        .route("/friends/requests", get(list_friend_requests).post(create_friend_request))
+        .route("/friends/requests/:id/accept", post(accept_friend_request))
+        .route("/friends/requests/:id/decline", post(decline_friend_request))
+        .route("/dm/:peer_id/messages", get(list_direct_messages).post(send_direct_message))
+        .route("/auth/ws-ticket", post(create_ws_ticket))
+        .route("/ws", get(websocket_handler))
+        .with_state(AppState { db, events, ws_tickets: Arc::new(Mutex::new(HashMap::new())) })
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
