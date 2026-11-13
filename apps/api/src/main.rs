@@ -13,8 +13,8 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Duration, Utc};
-use rand_core::OsRng;
 use futures_util::{SinkExt, StreamExt};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -510,7 +510,9 @@ async fn list_friend_requests(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<FriendRequestView>>, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
     let requests = sqlx::query_as::<_, FriendRequestView>(
         "SELECT fr.id, fr.sender_id, s.username AS sender_username, fr.recipient_id, r.username AS recipient_username, fr.status, fr.created_at FROM friend_requests fr JOIN accounts s ON s.id = fr.sender_id JOIN accounts r ON r.id = fr.recipient_id WHERE (fr.sender_id = $1 OR fr.recipient_id = $1) AND fr.status = 'pending' ORDER BY fr.created_at DESC",
@@ -528,7 +530,9 @@ async fn respond_friend_request(
     Path(request_id): Path<Uuid>,
     accept: bool,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let recipient_id = authenticated_account_id(&db, &headers).await?;
     let status = if accept { "accepted" } else { "declined" };
     let result = sqlx::query(
@@ -555,7 +559,9 @@ async fn accept_friend_request(
 }
 
 async fn decline_friend_request(
-    State(state): State<AppState>, headers: HeaderMap, Path(id): Path<Uuid>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
 ) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
     respond_friend_request(State(state), headers, Path(id), false).await
 }
@@ -564,7 +570,9 @@ async fn list_friends(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<FriendView>>, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
     let friends = sqlx::query_as::<_, FriendView>(
         "SELECT a.id, a.username, p.display_name FROM friend_requests fr JOIN accounts a ON a.id = CASE WHEN fr.sender_id = $1 THEN fr.recipient_id ELSE fr.sender_id END LEFT JOIN profiles p ON p.account_id = a.id WHERE (fr.sender_id = $1 OR fr.recipient_id = $1) AND fr.status = 'accepted' ORDER BY a.username",
@@ -581,12 +589,17 @@ async fn list_direct_messages(
     headers: HeaderMap,
     Path(peer_id): Path<Uuid>,
 ) -> Result<Json<Vec<DirectMessageView>>, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
     let is_friend = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM friend_requests WHERE status = 'accepted' AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)))",
     )
-    .bind(account_id).bind(peer_id).fetch_one(&db).await
+    .bind(account_id)
+    .bind(peer_id)
+    .fetch_one(&db)
+    .await
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
     if !is_friend {
         return Err(error(
@@ -626,9 +639,17 @@ async fn send_direct_message(
     let is_friend = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM friend_requests WHERE status = 'accepted' AND ((sender_id = $1 AND recipient_id = $2) OR (sender_id = $2 AND recipient_id = $1)))",
     )
-    .bind(account_id).bind(peer_id).fetch_one(&db).await
+    .bind(account_id)
+    .bind(peer_id)
+    .fetch_one(&db)
+    .await
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
-    if !is_friend { return Err(error(StatusCode::FORBIDDEN, "direct_messages_require_friendship")); }
+    if !is_friend {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "direct_messages_require_friendship",
+        ));
+    }
     let message = sqlx::query_as::<_, DirectMessageView>(
         "INSERT INTO direct_messages (sender_id, recipient_id, content) VALUES ($1, $2, $3) RETURNING id, sender_id, recipient_id, content, created_at",
     )
