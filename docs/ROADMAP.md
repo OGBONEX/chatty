@@ -2,15 +2,17 @@
 
 ## Milestone 0 — Foundation
 - [x] Rust workspace and Axum health endpoint
-- [x] Responsive React web client shell with local demo messages and basic appearance/notification toggles
+- [x] Responsive React web client shell with local demo messages and basic settings
 - [x] Product architecture, security and roadmap documentation
-- [ ] Import final approved Chatty logo assets into all platform bundles
 
 ## Milestone 1 — Accounts and persistence
-- [x] Initial PostgreSQL schema and SQLx migration runner (accounts, profiles, sessions, friend requests)
-- [ ] Registration, login, email verification and session management
-- [ ] Argon2id password hashing, refresh-token rotation and account recovery
-- [ ] Profile and friend-request API endpoints, validation and privacy controls
+- [x] PostgreSQL schema and migration runner for accounts, profiles, sessions and friend requests
+- [x] Account registration and login API with Argon2id password hashing
+- [x] Session lookup and logout/revocation endpoints
+- [x] Web registration and login screens connected to the API
+- [ ] Email verification, password reset and refresh-token rotation
+- [ ] Rate limiting, abuse protection and production cookie/session hardening
+- [ ] Profile editing and friend-request API endpoints
 
 ## Milestone 2 — Servers and messaging
 - [ ] Servers, memberships, roles, permissions and channels
