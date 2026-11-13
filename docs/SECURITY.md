@@ -1,15 +1,16 @@
 # Security baseline
 
+- Passwords are hashed with Argon2id; plaintext passwords are never stored.
+- Session bearer tokens are generated randomly and only SHA-256 hashes are stored in the database.
+- Logout revokes the current session; expired and revoked sessions cannot access `/auth/me`.
 - Never commit credentials, signing keys, database URLs or production secrets.
-- Hash passwords with Argon2id; never store plaintext passwords.
-- Store only hashes of refresh tokens; rotate refresh tokens and revoke sessions on logout, password reset and suspicious activity.
-- Use HTTPS and secure HttpOnly SameSite cookies for browser sessions.
+- Use HTTPS and secure HttpOnly SameSite cookies for browser sessions before production.
+- Add refresh-token rotation, account recovery, email verification and rate limiting before public launch.
 - Enforce authorization server-side for every server, channel, message and file operation.
-- Apply account, IP and resource rate limits.
 - Bound and validate all user input and uploads; scan uploaded files.
 - Escape user content and never render arbitrary HTML.
-- Use explicit production CORS origins and a restrictive Content Security Policy.
+- Replace permissive development CORS with explicit production origins and a restrictive Content Security Policy.
 - Sign update manifests and binaries; verify before installation and preserve rollback.
 - Provide account export/deletion and document retention before public launch.
 
-The initial migration creates identity/social storage tables but no account, authentication or messaging endpoints. The API remains a development foundation and is not production-ready. The credentials in infra/docker-compose.yml are local-development-only.
+Registration/login endpoints are an initial development implementation, not a production-ready identity system. The browser client keeps its bearer token in memory only and loses the session on reload. Email verification, recovery, token rotation, rate limiting and hardened production cookie handling remain outstanding. Docker Compose credentials are local-development-only.
