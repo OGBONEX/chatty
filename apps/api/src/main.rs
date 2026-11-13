@@ -192,7 +192,7 @@ async fn login(
     let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let login = input.login.trim().to_lowercase();
     let account = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
-        "SELECT a.id, a.email, a.username, a.password_hash, p.display_name FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id WHERE a.email = $1 OR a.username = $1"
+        "SELECT a.id, a.email, a.username, a.password_hash, p.display_name FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id WHERE a.email = $1 OR a.username = $1 ORDER BY CASE WHEN a.email = $1 THEN 0 ELSE 1 END LIMIT 1"
     )
     .bind(&login)
     .fetch_optional(&db)
