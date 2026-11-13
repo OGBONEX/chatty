@@ -193,9 +193,58 @@ export default function App() {
     <main className="main">
       <header className="topbar"><div className="channel-title"><Hash size={20}/><b>{page==='settings'?'User Settings':channel}</b></div><div className="top-actions"><label className="search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search local messages"/></label><button className="icon-button" title="Toggle notifications" onClick={()=>setNotifications(v=>!v)}><Bell size={19}/></button><button className="update-button" onClick={()=>setUpdateOpen(v=>!v)}><Download size={17}/> Updates</button><button className="icon-button" title="Settings" onClick={()=>setPage(page==='settings'?'chat':'settings')}><Settings size={19}/></button></div></header>
       {updateOpen&&<div className="update-popover"><button className="close" onClick={()=>setUpdateOpen(false)}><X size={16}/></button><b>Preview build</b><p>Chatty v0.1.0</p><small>Signed update delivery will be connected for desktop releases in a later milestone.</small></div>}
-      {page==='friends'?<FriendsPanel account={account} friends={friends} requests={friendRequests} username={friendUsername} setUsername={setFriendUsername} error={socialError} addFriend={addFriend} answer={answerFriendRequest} openDM={openDirectMessage}/>:page==='dm'&&selectedFriend?<DirectMessagePanel account={account} friend={selectedFriend} messages={dmMessages} error={socialError} send={sendDirectMessage} back={()=>setPage('friends')}/>:page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2><label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label><label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label><div className="profile-form-footer"><small>{profileBio.length}/280 characters</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><p>{m.text}</p></div></article>)}</div><form className="composer" onSubmit={send}><input value={draft} onChange={e=>setDraft(e.target.value)} placeholder={'Message #'+channel}/><button className="send" type="submit"><Send size={18}/></button></form></section>}
+      {page==='friends'?<FriendsPanel account={account} friends={friends} requests={friendRequests} username={friendUsername} setUsername={setFriendUsername} error={socialError} addFriend={addFriend} answer={answerFriendRequest} openDM={openDirectMessage}/>:page==='dm'&&selectedFriend?<DirectMessagePanel account={account} friend={selectedFriend} messages={dmMessages} error={socialError} send={sendDirectMessage} back={()=>setPage('friends')}/>:page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2><label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label><label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label><div className="profile-form-footer"><small>{profileBio.length}/280 characters</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><MessageBody content={m.text}/></div></article>)}</div><RichComposer value={draft} setValue={setDraft} onSubmit={send} placeholder={'Message #'+channel}/></section>}
       <footer className="statusbar"><span><i/> Signed in · Direct messages sync through PostgreSQL</span><span>Chatty · 0.1.0</span></footer>
     </main>
+  </div>;
+}
+
+const EMOJI_GROUPS = [
+  { label: 'Faces', items: ['😀','😃','😄','😁','😆','😂','🤣','🥹','😊','😍','🥰','😘','😎','🤔','🙄','😭','😡','🥳','🤯','😴','🤗','🫡'] },
+  { label: 'Hands', items: ['👋','👍','👎','👏','🙌','🤝','🙏','💪','✌️','🤞','🫶','❤️'] },
+  { label: 'Things', items: ['🔥','✨','🎉','💯','⭐','🚀','🎮','🎧','💜','💀','👀','💬'] },
+];
+
+function allowedGifUrl(value: string) {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'https:' && ['media.tenor.com','media.giphy.com','i.giphy.com'].includes(url.hostname);
+  } catch { return false; }
+}
+
+function MessageBody({content}:{content:string}) {
+  const gif = content.match(/^GIF:(https:\/\/(?:media\.tenor\.com|media\.giphy\.com|i\.giphy\.com)\/\S+)$/i)?.[1]
+    ?? (allowedGifUrl(content) ? content : null);
+  if (gif && allowedGifUrl(gif)) return <div className="message-gif"><img src={gif} alt="Shared GIF" loading="lazy"/><a href={gif} target="_blank" rel="noreferrer">Open GIF</a></div>;
+  const parts = content.split(/(https?:\/\/[^\s]+)/g);
+  return <p className="message-body">{parts.map((part,index)=>/^https?:\/\//.test(part)
+    ? <a key={index} href={part} target="_blank" rel="noreferrer">{part}</a>
+    : <span key={index}>{part}</span>)}</p>;
+}
+
+function RichComposer({value,setValue,onSubmit,placeholder}:{value:string;setValue:(value:string)=>void;onSubmit:(event:FormEvent<HTMLFormElement>)=>void;placeholder:string}) {
+  const [emojiOpen,setEmojiOpen]=useState(false);
+  const [gifOpen,setGifOpen]=useState(false);
+  const [gifQuery,setGifQuery]=useState('');
+  const [gifUrl,setGifUrl]=useState('');
+  const [gifError,setGifError]=useState('');
+  function insertEmoji(emoji:string) { setValue(value+emoji);setEmojiOpen(false); }
+  function insertGif() {
+    if(!allowedGifUrl(gifUrl)){setGifError('Paste a direct HTTPS GIF link from Tenor or GIPHY.');return;}
+    setValue((value?value+' ':'')+'GIF:'+gifUrl.trim());
+    setGifUrl('');setGifError('');setGifOpen(false);
+  }
+  return <div className="rich-composer-wrap">
+    {(emojiOpen||gifOpen)&&<div className="composer-popover">
+      {emojiOpen&&<div className="emoji-picker"><div className="popover-heading">Choose an emoji</div>{EMOJI_GROUPS.map(group=><div className="emoji-group" key={group.label}><small>{group.label}</small><div>{group.items.map(emoji=><button type="button" key={emoji} aria-label={'Insert '+emoji} onClick={()=>insertEmoji(emoji)}>{emoji}</button>)}</div></div>)}</div>}
+      {gifOpen&&<div className="gif-picker"><div className="popover-heading">Share a GIF</div><p>Search Tenor, open a result, then paste its direct GIF link below.</p><form onSubmit={event=>{event.preventDefault();window.open('https://tenor.com/search/'+encodeURIComponent(gifQuery.trim()||'funny')+'-gifs','_blank','noopener,noreferrer')}}><input value={gifQuery} onChange={event=>setGifQuery(event.target.value)} placeholder="Search GIFs"/><button type="submit">Search Tenor</button></form><input value={gifUrl} onChange={event=>{setGifUrl(event.target.value);setGifError('')}} placeholder="Paste direct GIF URL"/>{gifError&&<small className="social-error">{gifError}</small>}<button type="button" className="insert-gif" onClick={insertGif}>Insert GIF</button></div>}
+    </div>}
+    <form className="composer rich-composer" onSubmit={onSubmit}>
+      <button type="button" className="composer-tool" aria-label="Open emoji picker" aria-expanded={emojiOpen} onClick={()=>{setEmojiOpen(v=>!v);setGifOpen(false)}}>☺</button>
+      <button type="button" className="composer-tool gif-tool" aria-label="Share a GIF" aria-expanded={gifOpen} onClick={()=>{setGifOpen(v=>!v);setEmojiOpen(false)}}>GIF</button>
+      <input value={value} onChange={event=>setValue(event.target.value)} maxLength={4000} placeholder={placeholder}/>
+      <button className="send" type="submit" aria-label="Send message"><Send size={18}/></button>
+    </form>
   </div>;
 }
 
@@ -216,9 +265,9 @@ function FriendsPanel({account,friends,requests,username,setUsername,error,addFr
 function DirectMessagePanel({account,friend,messages,error,send,back}:{account:Account;friend:Friend;messages:DirectMessage[];error:string;send:(e:FormEvent<HTMLFormElement>,content:string)=>void;back:()=>void}) {
   const [draft,setDraft]=useState('');
   return <section className="dm-page"><header><button className="secondary" onClick={back}>← Friends</button><h1>{friend.display_name||friend.username}</h1><small>Private conversation · live updates</small></header>
-    <div className="dm-history">{messages.length===0?<p className="muted">No messages yet. Start the conversation.</p>:messages.map(message=><article className={'dm-message '+(message.sender_id===account.id?'mine':'')} key={message.id}><b>{message.sender_id===account.id?'You':friend.display_name||friend.username}</b><p>{message.content}</p><time>{new Date(message.created_at).toLocaleString()}</time></article>)}</div>
+    <div className="dm-history">{messages.length===0?<p className="muted">No messages yet. Start the conversation.</p>:messages.map(message=><article className={'dm-message '+(message.sender_id===account.id?'mine':'')} key={message.id}><b>{message.sender_id===account.id?'You':friend.display_name||friend.username}</b><MessageBody content={message.content}/><time>{new Date(message.created_at).toLocaleString()}</time></article>)}</div>
     {error&&<p className="social-error">{error}</p>}
-    <form className="composer" onSubmit={event=>{void send(event,draft);setDraft('')}}><input value={draft} onChange={event=>setDraft(event.target.value)} maxLength={4000} placeholder={'Message '+(friend.display_name||friend.username)}/><button className="send" type="submit"><Send size={18}/></button></form>
+    <RichComposer value={draft} setValue={setDraft} onSubmit={event=>{void send(event,draft);setDraft('')}} placeholder={'Message '+(friend.display_name||friend.username)}/>
   </section>;
 }
 
