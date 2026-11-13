@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { Bell, Hash, Headphones, MessageCircle, Plus, Search, Settings, Shield, Users, Volume2, ChevronDown, Send, Download, X, LogOut } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
-type Account = { id: string; email: string; username: string; display_name?: string | null };
+type Account = { id: string; email: string; username: string; display_name?: string | null; bio: string; avatar_url?: string | null; banner_url?: string | null; status_text?: string | null };
 type AuthResult = { token: string; expires_at: string; account: Account };
 type Message = { name: string; text: string; time: string };
 type Friend = { id: string; username: string; display_name: string | null };
@@ -16,6 +16,7 @@ const seed: Message[] = [
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [page,setPage]=useState<'chat'|'settings'|'friends'|'dm'>('chat');
   const [friends,setFriends]=useState<Friend[]>([]);
   const [friendRequests,setFriendRequests]=useState<FriendRequest[]>([]);
@@ -37,6 +38,9 @@ export default function App() {
   const [authBusy,setAuthBusy]=useState(false);
   const [profileName,setProfileName]=useState('');
   const [profileBio,setProfileBio]=useState('');
+  const [profileAvatarUrl,setProfileAvatarUrl]=useState('');
+  const [profileBannerUrl,setProfileBannerUrl]=useState('');
+  const [profileStatusText,setProfileStatusText]=useState('');
   const [profileStatus,setProfileStatus]=useState('');
   const [profileBusy,setProfileBusy]=useState(false);
 
@@ -57,10 +61,14 @@ export default function App() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? 'Authentication failed');
       const auth = result as AuthResult;
+      sessionStorage.setItem('chatty_token', auth.token);
       setToken(auth.token);
       setAccount(auth.account);
       setProfileName(auth.account.display_name ?? '');
-      setProfileBio('');
+      setProfileBio(auth.account.bio ?? '');
+      setProfileAvatarUrl(auth.account.avatar_url ?? '');
+      setProfileBannerUrl(auth.account.banner_url ?? '');
+      setProfileStatusText(auth.account.status_text ?? '');
       setProfileStatus('');
       await refreshSocial(auth.token);
     } catch (error) {
@@ -82,11 +90,11 @@ export default function App() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ display_name: profileName, bio: profileBio }),
+        body: JSON.stringify({ display_name: profileName, bio: profileBio, avatar_url: profileAvatarUrl, banner_url: profileBannerUrl, status_text: profileStatusText }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? 'Profile update failed');
-      setAccount(current => current ? { ...current, display_name: result.display_name } : current);
+      setAccount(current => current ? { ...current, display_name: result.display_name, bio: result.bio, avatar_url: result.avatar_url, banner_url: result.banner_url, status_text: result.status_text } : current);
       setProfileStatus('Profile saved.');
     } catch (error) {
       setProfileStatus(error instanceof Error ? error.message.replaceAll('_', ' ') : 'Could not save profile.');
@@ -110,6 +118,34 @@ export default function App() {
       setSocialError('');
     } catch (error) { setSocialError(error instanceof Error ? error.message : 'Could not load friends'); }
   }
+  useEffect(() => {
+    const savedToken = sessionStorage.getItem('chatty_token');
+    if (!savedToken) { setAuthLoading(false); return; }
+    let cancelled = false;
+    async function restoreSession() {
+      try {
+        const response = await fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${savedToken}` } });
+        if (!response.ok) throw new Error('session_expired');
+        const restored = await response.json() as Account;
+        if (cancelled) return;
+        setAccount(restored);
+        setToken(savedToken);
+        setProfileName(restored.display_name ?? '');
+        setProfileBio(restored.bio ?? '');
+        setProfileAvatarUrl(restored.avatar_url ?? '');
+        setProfileBannerUrl(restored.banner_url ?? '');
+        setProfileStatusText(restored.status_text ?? '');
+        await refreshSocial(savedToken);
+      } catch {
+        sessionStorage.removeItem('chatty_token');
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    }
+    void restoreSession();
+    return () => { cancelled = true; };
+  }, []);
+
   async function addFriend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!token) return; setSocialError('');
     try {
@@ -166,16 +202,21 @@ export default function App() {
     if (token) {
       try { await fetch(`${API}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch { /* local sign-out still proceeds */ }
     }
+    sessionStorage.removeItem('chatty_token');
     setToken(null);
     setAccount(null);
     setProfileName('');
     setProfileBio('');
+    setProfileAvatarUrl('');
+    setProfileBannerUrl('');
+    setProfileStatusText('');
     setPage('chat');
   }
 
   function send(e:FormEvent){e.preventDefault();const text=draft.trim();if(!text)return;setMessages(v=>[...v,{name:account?.display_name || account?.username || 'You',time:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),text}]);setDraft('');}
   const shown=messages.filter(m=>(m.text+m.name).toLowerCase().includes(search.toLowerCase()));
 
+  if (authLoading) return <main className="auth-screen"><div className="auth-card"><div className="auth-logo">C</div><h1>Loading Chatty…</h1><p>Restoring your session.</p></div></main>;
   if (!account || !token) return <AuthScreen mode={authMode} setMode={setAuthMode} submit={authenticate} busy={authBusy} error={authError}/>;
 
   return <div className={dark?'app dark':'app light'}>
@@ -188,12 +229,22 @@ export default function App() {
       {['general','announcements','media','off-topic'].map(c=><button key={c} className={'channel '+(channel===c?'selected':'')} onClick={()=>{setChannel(c);setPage('chat')}}><Hash size={17}/>{c}</button>)}
       <div className="section-label voice-label">VOICE CHANNELS <Plus size={15}/></div>
       <button className="channel"><Volume2 size={17}/> Lounge</button><button className="channel"><Headphones size={17}/> Gaming</button>
-      <div className="sidebar-bottom"><div className="user-avatar">{(account.display_name || account.username)[0].toUpperCase()}</div><span className="user-meta"><b>{account.display_name || account.username}</b><small>Signed in</small></span><button className="icon-button" title="Sign out" onClick={logout}><LogOut size={17}/></button><button className="icon-button" title="Settings" onClick={()=>setPage('settings')}><Settings size={18}/></button></div>
+      <div className="sidebar-bottom"><div className="user-avatar">{account.avatar_url?<img src={account.avatar_url} alt="" />:(account.display_name || account.username)[0].toUpperCase()}</div><span className="user-meta"><b>{account.display_name || account.username}</b><small>Signed in</small></span><button className="icon-button" title="Sign out" onClick={logout}><LogOut size={17}/></button><button className="icon-button" title="Settings" onClick={()=>setPage('settings')}><Settings size={18}/></button></div>
     </aside>
     <main className="main">
       <header className="topbar"><div className="channel-title"><Hash size={20}/><b>{page==='settings'?'User Settings':channel}</b></div><div className="top-actions"><label className="search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search local messages"/></label><button className="icon-button" title="Toggle notifications" onClick={()=>setNotifications(v=>!v)}><Bell size={19}/></button><button className="update-button" onClick={()=>setUpdateOpen(v=>!v)}><Download size={17}/> Updates</button><button className="icon-button" title="Settings" onClick={()=>setPage(page==='settings'?'chat':'settings')}><Settings size={19}/></button></div></header>
       {updateOpen&&<div className="update-popover"><button className="close" onClick={()=>setUpdateOpen(false)}><X size={16}/></button><b>Preview build</b><p>Chatty v0.1.0</p><small>Signed update delivery will be connected for desktop releases in a later milestone.</small></div>}
-      {page==='friends'?<FriendsPanel account={account} friends={friends} requests={friendRequests} username={friendUsername} setUsername={setFriendUsername} error={socialError} addFriend={addFriend} answer={answerFriendRequest} openDM={openDirectMessage}/>:page==='dm'&&selectedFriend?<DirectMessagePanel account={account} friend={selectedFriend} messages={dmMessages} error={socialError} send={sendDirectMessage} back={()=>setPage('friends')}/>:page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2><label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label><label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label><div className="profile-form-footer"><small>{profileBio.length}/280 characters</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><MessageBody content={m.text}/></div></article>)}</div><RichComposer value={draft} setValue={setDraft} onSubmit={send} placeholder={'Message #'+channel}/></section>}
+      {page==='friends'?<FriendsPanel account={account} friends={friends} requests={friendRequests} username={friendUsername} setUsername={setFriendUsername} error={socialError} addFriend={addFriend} answer={answerFriendRequest} openDM={openDirectMessage}/>:page==='dm'&&selectedFriend?<DirectMessagePanel account={account} friend={selectedFriend} messages={dmMessages} error={socialError} send={sendDirectMessage} back={()=>setPage('friends')}/>:page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2>
+          <div className="profile-preview" style={profileBannerUrl?{backgroundImage:`linear-gradient(90deg,#17131f88,#17131f22),url("${profileBannerUrl}")`}:undefined}>
+            <div className="profile-preview-avatar">{profileAvatarUrl?<img src={profileAvatarUrl} alt="Profile avatar preview"/>:(profileName||account.username).slice(0,1).toUpperCase()}</div>
+            <div><b>{profileName||account.username}</b><small>@{account.username}</small>{profileStatusText&&<span>{profileStatusText}</span>}</div>
+          </div>
+          <label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label>
+          <label>Profile picture URL<input type="url" value={profileAvatarUrl} onChange={event=>setProfileAvatarUrl(event.target.value)} maxLength={2048} placeholder="https://example.com/avatar.png"/></label>
+          <label>Profile banner URL<input type="url" value={profileBannerUrl} onChange={event=>setProfileBannerUrl(event.target.value)} maxLength={2048} placeholder="https://example.com/banner.png"/></label>
+          <label>Status<input value={profileStatusText} onChange={event=>setProfileStatusText(event.target.value)} maxLength={80} placeholder="What are you up to?"/></label>
+          <label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label>
+          <div className="profile-form-footer"><small>{profileBio.length}/280 · {profileStatusText.length}/80</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><MessageBody content={m.text}/></div></article>)}</div><RichComposer value={draft} setValue={setDraft} onSubmit={send} placeholder={'Message #'+channel}/></section>}
       <footer className="statusbar"><span><i/> Signed in · Direct messages sync through PostgreSQL</span><span>Chatty · 0.1.0</span></footer>
     </main>
   </div>;
@@ -272,9 +323,13 @@ function DirectMessagePanel({account,friend,messages,error,send,back}:{account:A
 }
 
 function AuthScreen({mode,setMode,submit,busy,error}:{mode:'login'|'register';setMode:(v:'login'|'register')=>void;submit:(e:FormEvent<HTMLFormElement>)=>void;busy:boolean;error:string}) {
-  return <main className="auth-screen"><form className="auth-card" onSubmit={submit}><div className="auth-logo">C</div><h1>{mode==='register'?'Create your account':'Welcome back'}</h1><p>{mode==='register'?'Join Chatty and start building your communities.':'Sign in to continue to Chatty.'}</p>
+  const [showPassword,setShowPassword]=useState(false);
+  return <main className="auth-screen"><form className="auth-card" onSubmit={event=>{const data=new FormData(event.currentTarget);if(mode==='register'&&data.get('password')!==data.get('confirmPassword')){event.preventDefault();const node=event.currentTarget.querySelector<HTMLElement>('[data-password-error]');if(node)node.textContent='Passwords do not match.';return;}const node=event.currentTarget.querySelector<HTMLElement>('[data-password-error]');if(node)node.textContent='';submit(event);}}><div className="auth-logo">C</div><h1>{mode==='register'?'Create your account':'Welcome back'}</h1><p>{mode==='register'?'Join Chatty and start building your communities.':'Sign in to continue to Chatty.'}</p>
     {mode==='register'?<><label>Email<input name="email" type="email" autoComplete="email" maxLength={254} required/></label><label>Username<input name="username" autoComplete="username" minLength={3} maxLength={24} pattern="[A-Za-z0-9_]+" required/></label></>:<label>Email or username<input name="login" autoComplete="username" required/></label>}
-    <label>Password<input name="password" type="password" autoComplete={mode==='register'?'new-password':'current-password'} minLength={mode==='register'?10:1} maxLength={128} required/></label>
+    <label>Password<input name="password" type={showPassword?'text':'password'} autoComplete={mode==='register'?'new-password':'current-password'} minLength={mode==='register'?10:1} maxLength={128} required/></label>
+    {mode==='register'&&<label>Confirm password<input name="confirmPassword" type={showPassword?'text':'password'} autoComplete="new-password" minLength={10} maxLength={128} required/></label>}
+    <button type="button" className="password-visibility" onClick={()=>setShowPassword(value=>!value)}>{showPassword?'Hide passwords':'Show passwords'}</button>
+    <small data-password-error className="auth-error" role="alert"></small>
     {error&&<div className="auth-error" role="alert">{error}</div>}<button className="auth-submit" disabled={busy}>{busy?'Please wait…':mode==='register'?'Create account':'Log in'}</button>
     <div className="auth-switch">{mode==='register'?'Already have an account?':'New to Chatty?'} <button type="button" onClick={()=>setMode(mode==='register'?'login':'register')}>{mode==='register'?'Log in':'Create an account'}</button></div>
     <small className="auth-footnote">Use a unique password. Account creation currently requires the Chatty API and PostgreSQL to be running.</small>
