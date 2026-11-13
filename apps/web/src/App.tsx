@@ -8,6 +8,9 @@ type Message = { name: string; text: string; time: string };
 type Friend = { id: string; username: string; display_name: string | null };
 type FriendRequest = { id: string; sender_id: string; sender_username: string; recipient_id: string; recipient_username: string; status: string; created_at: string };
 type DirectMessage = { id: string; sender_id: string; recipient_id: string; content: string; created_at: string };
+type Server = { id:string; name:string; owner_id:string; created_at:string };
+type Channel = { id:string; server_id:string; name:string; channel_type:string; position:number };
+type ChannelMessage = { id:string; channel_id:string; author_id:string; username:string; content:string; created_at:string };
 type Preferences = { dark:boolean; compact:boolean; notifications:boolean; accent:string; reduceMotion:boolean; largerText:boolean; enterToSend:boolean; showTimestamps:boolean };
 const DEFAULT_PREFERENCES: Preferences = { dark:true, compact:false, notifications:true, accent:'#a56af5', reduceMotion:false, largerText:false, enterToSend:true, showTimestamps:true };
 function readPreferences(): Preferences { try { return { ...DEFAULT_PREFERENCES, ...JSON.parse(localStorage.getItem('chatty_preferences') ?? '{}') }; } catch { return DEFAULT_PREFERENCES; } }
@@ -28,6 +31,11 @@ export default function App() {
   const [socialError,setSocialError]=useState('');
   const [friendUsername,setFriendUsername]=useState('');
   const [channel,setChannel]=useState('general');
+  const [servers,setServers]=useState<Server[]>([]);
+  const [selectedServer,setSelectedServer]=useState<Server|null>(null);
+  const [channels,setChannels]=useState<Channel[]>([]);
+  const [selectedChannel,setSelectedChannel]=useState<Channel|null>(null);
+  const [channelMessages,setChannelMessages]=useState<ChannelMessage[]>([]);
   const [messages,setMessages]=useState(seed);
   const [draft,setDraft]=useState('');
   const [search,setSearch]=useState('');
@@ -78,6 +86,7 @@ export default function App() {
       setProfileStatusText(auth.account.status_text ?? '');
       setProfileStatus('');
       await refreshSocial(auth.token);
+      await loadServers(auth.token);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message.replaceAll('_', ' ') : 'Could not connect to Chatty. Check that the API is running.');
     } finally {
@@ -143,6 +152,7 @@ export default function App() {
         setProfileBannerUrl(restored.banner_url ?? '');
         setProfileStatusText(restored.status_text ?? '');
         await refreshSocial(savedToken);
+        await loadServers(savedToken);
       } catch {
         sessionStorage.removeItem('chatty_token');
       } finally {
@@ -153,6 +163,60 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  async function loadServers(authToken=token) {
+    if(!authToken)return;
+    try {
+      const response=await fetch(`${API}/servers`,{headers:{Authorization:`Bearer ${authToken}`}});
+      if(!response.ok)throw new Error('Could not load servers');
+      const items=await response.json() as Server[];
+      setServers(items);
+      if(!selectedServer&&items.length)await selectServer(items[0],authToken);
+    } catch(error){setSocialError(error instanceof Error?error.message:'Could not load servers');}
+  }
+  async function selectServer(server:Server,authToken=token) {
+    if(!authToken)return;
+    setSelectedServer(server);setSelectedChannel(null);setChannelMessages([]);
+    try{
+      const response=await fetch(`${API}/servers/${server.id}/channels`,{headers:{Authorization:`Bearer ${authToken}`}});
+      if(!response.ok)throw new Error('Could not load channels');
+      const items=await response.json() as Channel[];setChannels(items);
+      if(items.length)await selectChannel(items[0],authToken);
+    }catch(error){setSocialError(error instanceof Error?error.message:'Could not load channels');}
+  }
+  async function selectChannel(item:Channel,authToken=token) {
+    if(!authToken)return;
+    setSelectedChannel(item);setChannel(item.name);setPage('chat');
+    try{
+      const response=await fetch(`${API}/channels/${item.id}/messages`,{headers:{Authorization:`Bearer ${authToken}`}});
+      if(!response.ok)throw new Error('Could not load channel messages');
+      setChannelMessages(await response.json());
+    }catch(error){setSocialError(error instanceof Error?error.message:'Could not load messages');}
+  }
+  async function createServer() {
+    if(!token)return;
+    const name=window.prompt('Name your new server');
+    if(!name?.trim())return;
+    const response=await fetch(`${API}/servers`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({name})});
+    const result=await response.json();
+    if(!response.ok){setSocialError(result.error?.replaceAll('_',' ')??'Could not create server');return;}
+    const created=result as Server;setServers(current=>[...current,created]);await selectServer(created);
+  }
+  async function createChannel() {
+    if(!token||!selectedServer)return;
+    const name=window.prompt('New text channel name (letters, numbers, - or _)');
+    if(!name?.trim())return;
+    const response=await fetch(`${API}/servers/${selectedServer.id}/channels`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({name,channel_type:'text'})});
+    const result=await response.json();
+    if(!response.ok){setSocialError(result.error?.replaceAll('_',' ')??'Could not create channel');return;}
+    const created=result as Channel;setChannels(current=>[...current,created]);await selectChannel(created);
+  }
+  async function sendChannelMessage(event:FormEvent) {
+    event.preventDefault();if(!token||!selectedChannel||!draft.trim())return;
+    const response=await fetch(`${API}/channels/${selectedChannel.id}/messages`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({content:draft})});
+    const result=await response.json();
+    if(!response.ok){setSocialError(result.error?.replaceAll('_',' ')??'Could not send message');return;}
+    setChannelMessages(current=>[...current,result]);setDraft('');
+  }
   async function addFriend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!token) return; setSocialError('');
     try {
@@ -228,13 +292,14 @@ export default function App() {
   if (!account || !token) return <AuthScreen mode={authMode} setMode={setAuthMode} submit={authenticate} busy={authBusy} error={authError}/>;
 
   return <div className={(dark?'app dark':'app light')+(reduceMotion?' reduce-motion':'')+(largerText?' larger-text':'')} style={{ ['--accent' as any]: accent }}>
-    <aside className="servers"><button className="server-logo active">C</button><div className="server-divider"/><button className="server-logo"><Users/></button><button className="server-logo add"><Plus/></button></aside>
+    <aside className="servers"><button className="server-logo active" title="Chatty home" onClick={()=>{setPage('friends');void refreshSocial()}}>C</button><div className="server-divider"/>{servers.map(server=><button key={server.id} className={'server-logo '+(selectedServer?.id===server.id?'active':'')} title={server.name} onClick={()=>void selectServer(server)}>{server.name.slice(0,2).toUpperCase()}</button>)}<button className="server-logo add" title="Create server" onClick={()=>void createServer()}><Plus/></button></aside>
     <aside className="sidebar">
       <button className="workspace"><span className="brand-mark">C</span><span><b>Chatty</b><small>Community space</small></span><ChevronDown size={17}/></button>
       <button className={'nav-item '+(page==='friends'||page==='dm'?'selected':'')} onClick={()=>{setPage('friends');void refreshSocial()}}><MessageCircle size={18}/> Direct Messages</button>
       {friends.map(friend=><button key={friend.id} className="channel" onClick={()=>void openDirectMessage(friend)}><MessageCircle size={15}/>{friend.display_name||friend.username}</button>)}
-      <div className="section-label">TEXT CHANNELS <Plus size={15}/></div>
-      {['general','announcements','media','off-topic'].map(c=><button key={c} className={'channel '+(channel===c?'selected':'')} onClick={()=>{setChannel(c);setPage('chat')}}><Hash size={17}/>{c}</button>)}
+      <div className="section-label">TEXT CHANNELS <button className="section-add" title="Create channel" onClick={()=>void createChannel()}><Plus size={15}/></button></div>
+      {channels.map(item=><button key={item.id} className={'channel '+(selectedChannel?.id===item.id?'selected':'')} onClick={()=>void selectChannel(item)}><Hash size={17}/>{item.name}</button>)}
+      {!selectedServer&&<small className="muted server-empty">Choose or create a server to see its channels.</small>}
       <div className="section-label voice-label">VOICE CHANNELS <Plus size={15}/></div>
       <button className="channel"><Volume2 size={17}/> Lounge</button><button className="channel"><Headphones size={17}/> Gaming</button>
       <div className="sidebar-bottom"><div className="user-avatar">{account.avatar_url?<img src={account.avatar_url} alt="" />:(account.display_name || account.username)[0].toUpperCase()}</div><span className="user-meta"><b>{account.display_name || account.username}</b><small>Signed in</small></span><button className="icon-button" title="Sign out" onClick={logout}><LogOut size={17}/></button><button className="icon-button" title="Settings" onClick={()=>setPage('settings')}><Settings size={18}/></button></div>
@@ -252,7 +317,7 @@ export default function App() {
           <label>Profile banner URL<input type="url" value={profileBannerUrl} onChange={event=>setProfileBannerUrl(event.target.value)} maxLength={2048} placeholder="https://example.com/banner.png"/></label>
           <label>Status<input value={profileStatusText} onChange={event=>setProfileStatusText(event.target.value)} maxLength={80} placeholder="What are you up to?"/></label>
           <label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label>
-          <div className="profile-form-footer"><small>{profileBio.length}/280 · {profileStatusText.length}/80</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Switch between dark and light appearance."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Use tighter spacing in message lists."/><Toggle checked={compact} change={setCompact}/><Setting title="Accent colour" desc="Choose the colour used by buttons and active controls."/><div className="accent-options">{['#a56af5','#3b82f6','#16a085','#e67e22','#e84393','#e5b93d'].map(color=><button type="button" key={color} aria-label={'Set accent '+color} aria-pressed={accent===color} className={accent===color?'accent-choice chosen':'accent-choice'} style={{backgroundColor:color}} onClick={()=>updatePreference('accent',color)}/>)}</div></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Enable notification indicators and alerts inside Chatty."/><Toggle checked={notifications} change={setNotifications}/><Setting title="Browser notifications" desc={typeof Notification==='undefined'?'This browser does not support desktop notifications.':Notification.permission==='granted'?'Browser notifications are allowed.':Notification.permission==='denied'?'Notifications are blocked in browser permissions.':'Allow Chatty to show browser notifications.'}/><button className="secondary settings-action" type="button" disabled={typeof Notification==='undefined'||Notification.permission==='denied'} onClick={()=>{if(typeof Notification!=='undefined')void Notification.requestPermission();}}>Enable browser notifications</button></>:tab==='Text & Messages'?<><Setting title="Enter to send" desc="Press Enter to send; Shift+Enter adds a new line."/><Toggle checked={enterToSend} change={value=>updatePreference('enterToSend',value)}/><Setting title="Show message timestamps" desc="Display the time next to messages."/><Toggle checked={showTimestamps} change={value=>updatePreference('showTimestamps',value)}/></>:tab==='Accessibility'?<><Setting title="Reduce motion" desc="Disable interface transitions and animations."/><Toggle checked={reduceMotion} change={value=>updatePreference('reduceMotion',value)}/><Setting title="Larger text" desc="Increase text size across Chatty."/><Toggle checked={largerText} change={value=>updatePreference('largerText',value)}/></>:tab==='Privacy & Safety'?<><Setting title="Account security" desc="Your current session can be ended from the account menu. Server-enforced privacy controls are being added with the API."/><div className="notice"><Shield size={18}/> Chatty will not show privacy controls that are not enforced by the server.</div></>:tab==='Voice & Video'?<><Setting title="Voice and video" desc="Voice rooms, device selection and video calls are not connected yet."/><div className="notice"><Headphones size={18}/> This section will become available when real-time voice infrastructure is added.</div></>:tab==='Keybinds'?<><Setting title="Send message" desc={enterToSend?'Enter':'Ctrl + Enter'}/><Setting title="New line" desc={enterToSend?'Shift + Enter':'Enter'}/><Setting title="Open settings" desc="Use the settings button in the top bar."/></>:tab==='Language & Region'?<Setting title="Display language" desc="English (United States) · more translations are planned."/>:tab==='Activity'?<Setting title="Activity status" desc="Rich presence and activity sharing are not available yet."/>:tab==='Storage'?<><Setting title="Local preferences" desc="Appearance and composer preferences are stored in this browser."/><button className="secondary settings-action" type="button" onClick={()=>{localStorage.removeItem('chatty_preferences');setPreferences(DEFAULT_PREFERENCES);}}>Reset local preferences</button></>:tab==='Advanced'?<><Setting title="Reset settings" desc="Restore default local appearance and messaging preferences."/><button className="secondary settings-action" type="button" onClick={()=>setPreferences(DEFAULT_PREFERENCES)}>Restore defaults</button></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases when desktop builds are available."/>:<Setting title="Settings section" desc="This setting is not available yet."/>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b>{showTimestamps&&<time>{m.time}</time>}</div><MessageBody content={m.text}/></div></article>)}</div><RichComposer value={draft} setValue={setDraft} onSubmit={send} placeholder={'Message #'+channel} enterToSend={enterToSend}/></section>}
+          <div className="profile-form-footer"><small>{profileBio.length}/280 · {profileStatusText.length}/80</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Switch between dark and light appearance."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Use tighter spacing in message lists."/><Toggle checked={compact} change={setCompact}/><Setting title="Accent colour" desc="Choose the colour used by buttons and active controls."/><div className="accent-options">{['#a56af5','#3b82f6','#16a085','#e67e22','#e84393','#e5b93d'].map(color=><button type="button" key={color} aria-label={'Set accent '+color} aria-pressed={accent===color} className={accent===color?'accent-choice chosen':'accent-choice'} style={{backgroundColor:color}} onClick={()=>updatePreference('accent',color)}/>)}</div></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Enable notification indicators and alerts inside Chatty."/><Toggle checked={notifications} change={setNotifications}/><Setting title="Browser notifications" desc={typeof Notification==='undefined'?'This browser does not support desktop notifications.':Notification.permission==='granted'?'Browser notifications are allowed.':Notification.permission==='denied'?'Notifications are blocked in browser permissions.':'Allow Chatty to show browser notifications.'}/><button className="secondary settings-action" type="button" disabled={typeof Notification==='undefined'||Notification.permission==='denied'} onClick={()=>{if(typeof Notification!=='undefined')void Notification.requestPermission();}}>Enable browser notifications</button></>:tab==='Text & Messages'?<><Setting title="Enter to send" desc="Press Enter to send; Shift+Enter adds a new line."/><Toggle checked={enterToSend} change={value=>updatePreference('enterToSend',value)}/><Setting title="Show message timestamps" desc="Display the time next to messages."/><Toggle checked={showTimestamps} change={value=>updatePreference('showTimestamps',value)}/></>:tab==='Accessibility'?<><Setting title="Reduce motion" desc="Disable interface transitions and animations."/><Toggle checked={reduceMotion} change={value=>updatePreference('reduceMotion',value)}/><Setting title="Larger text" desc="Increase text size across Chatty."/><Toggle checked={largerText} change={value=>updatePreference('largerText',value)}/></>:tab==='Privacy & Safety'?<><Setting title="Account security" desc="Your current session can be ended from the account menu. Server-enforced privacy controls are being added with the API."/><div className="notice"><Shield size={18}/> Chatty will not show privacy controls that are not enforced by the server.</div></>:tab==='Voice & Video'?<><Setting title="Voice and video" desc="Voice rooms, device selection and video calls are not connected yet."/><div className="notice"><Headphones size={18}/> This section will become available when real-time voice infrastructure is added.</div></>:tab==='Keybinds'?<><Setting title="Send message" desc={enterToSend?'Enter':'Ctrl + Enter'}/><Setting title="New line" desc={enterToSend?'Shift + Enter':'Enter'}/><Setting title="Open settings" desc="Use the settings button in the top bar."/></>:tab==='Language & Region'?<Setting title="Display language" desc="English (United States) · more translations are planned."/>:tab==='Activity'?<Setting title="Activity status" desc="Rich presence and activity sharing are not available yet."/>:tab==='Storage'?<><Setting title="Local preferences" desc="Appearance and composer preferences are stored in this browser."/><button className="secondary settings-action" type="button" onClick={()=>{localStorage.removeItem('chatty_preferences');setPreferences(DEFAULT_PREFERENCES);}}>Reset local preferences</button></>:tab==='Advanced'?<><Setting title="Reset settings" desc="Restore default local appearance and messaging preferences."/><button className="secondary settings-action" type="button" onClick={()=>setPreferences(DEFAULT_PREFERENCES)}>Restore defaults</button></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases when desktop builds are available."/>:<Setting title="Settings section" desc="This setting is not available yet."/>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>{selectedServer?selectedServer.name:'No server selected'} · #{channel}</h1><p>{selectedChannel?'Messages are saved to this server channel.':'Create a server to start a community.'}</p></div><div className="messages">{channelMessages.filter(m=>m.content.toLowerCase().includes(search.toLowerCase())).map(message=><article className={'message '+(compact?'compact':'')} key={message.id}><div className="avatar">{message.username[0]?.toUpperCase()}</div><div><div className="message-meta"><b>{message.username}</b>{showTimestamps&&<time>{new Date(message.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</time>}</div><MessageBody content={message.content}/></div></article>)}</div>{selectedChannel?<RichComposer value={draft} setValue={setDraft} onSubmit={sendChannelMessage} placeholder={'Message #'+channel} enterToSend={enterToSend}/>:<div className="notice">Select a server channel to start messaging.</div>}</section>}
       <footer className="statusbar"><span><i/> Signed in · Direct messages sync through PostgreSQL</span><span>Chatty · 0.1.0</span></footer>
     </main>
   </div>;

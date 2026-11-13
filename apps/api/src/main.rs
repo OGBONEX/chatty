@@ -731,6 +731,276 @@ async fn send_direct_message(
     Ok((StatusCode::CREATED, Json(message)))
 }
 
+// Persistent community/server foundation.
+#[derive(Deserialize)]
+struct CreateServerRequest {
+    name: String,
+}
+#[derive(Deserialize)]
+struct CreateChannelRequest {
+    name: String,
+    channel_type: Option<String>,
+}
+#[derive(Deserialize)]
+struct CreateChannelMessageRequest {
+    content: String,
+}
+#[derive(Serialize, sqlx::FromRow)]
+struct ServerView {
+    id: Uuid,
+    name: String,
+    owner_id: Uuid,
+    created_at: DateTime<Utc>,
+}
+#[derive(Serialize, sqlx::FromRow)]
+struct ChannelView {
+    id: Uuid,
+    server_id: Uuid,
+    name: String,
+    channel_type: String,
+    position: i32,
+}
+#[derive(Serialize, sqlx::FromRow)]
+struct ChannelMessageView {
+    id: Uuid,
+    channel_id: Uuid,
+    author_id: Uuid,
+    username: String,
+    content: String,
+    created_at: DateTime<Utc>,
+}
+
+fn valid_slug(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-' || c == b'_')
+}
+
+async fn require_server_member(
+    db: &PgPool,
+    server_id: Uuid,
+    account_id: Uuid,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let member = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM server_members WHERE server_id=$1 AND account_id=$2)",
+    )
+    .bind(server_id)
+    .bind(account_id)
+    .fetch_one(db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if !member {
+        return Err(error(StatusCode::FORBIDDEN, "server_membership_required"));
+    }
+    Ok(())
+}
+
+async fn create_server(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateServerRequest>,
+) -> Result<(StatusCode, Json<ServerView>), (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let owner = authenticated_account_id(&db, &headers).await?;
+    let name = input.name.trim();
+    if !(2..=64).contains(&name.chars().count()) {
+        return Err(error(StatusCode::BAD_REQUEST, "server_name_invalid"));
+    }
+
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    let server = sqlx::query_as::<_, ServerView>(
+        "INSERT INTO servers(name,owner_id) VALUES($1,$2) RETURNING id,name,owner_id,created_at",
+    )
+    .bind(name)
+    .bind(owner)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    let role_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO server_roles(server_id,name,permissions,is_default) VALUES($1,'owner',ARRAY['manage_server','manage_channels','manage_roles','manage_invites','kick_members','ban_members','send_messages','read_messages'],false) RETURNING id",
+    )
+    .bind(server.id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    sqlx::query("INSERT INTO server_members(server_id,account_id,role_id) VALUES($1,$2,$3)")
+        .bind(server.id)
+        .bind(owner)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    sqlx::query(
+        "INSERT INTO server_channels(server_id,name,channel_type,position) VALUES($1,'general','text',0)",
+    )
+    .bind(server.id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    tx.commit()
+        .await
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok((StatusCode::CREATED, Json(server)))
+}
+
+async fn list_servers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ServerView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account = authenticated_account_id(&db, &headers).await?;
+    let rows = sqlx::query_as::<_, ServerView>(
+        "SELECT s.id,s.name,s.owner_id,s.created_at FROM servers s JOIN server_members m ON m.server_id=s.id WHERE m.account_id=$1 ORDER BY s.created_at",
+    )
+    .bind(account)
+    .fetch_all(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(rows))
+}
+
+async fn create_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(server_id): Path<Uuid>,
+    Json(input): Json<CreateChannelRequest>,
+) -> Result<(StatusCode, Json<ChannelView>), (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account = authenticated_account_id(&db, &headers).await?;
+    require_server_member(&db, server_id, account).await?;
+    let name = input.name.trim().to_lowercase();
+    if !valid_slug(&name, 64) {
+        return Err(error(StatusCode::BAD_REQUEST, "channel_name_invalid"));
+    }
+    let kind = input.channel_type.as_deref().unwrap_or("text");
+    if !matches!(kind, "text" | "announcement") {
+        return Err(error(StatusCode::BAD_REQUEST, "channel_type_invalid"));
+    }
+    let can_manage = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM server_members m JOIN server_roles r ON r.id=m.role_id WHERE m.server_id=$1 AND m.account_id=$2 AND ('manage_channels'=ANY(r.permissions) OR 'manage_server'=ANY(r.permissions)))",
+    )
+    .bind(server_id)
+    .bind(account)
+    .fetch_one(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if !can_manage {
+        return Err(error(StatusCode::FORBIDDEN, "manage_channels_required"));
+    }
+    let row = sqlx::query_as::<_, ChannelView>(
+        "INSERT INTO server_channels(server_id,name,channel_type,position) VALUES($1,$2,$3,COALESCE((SELECT MAX(position)+1 FROM server_channels WHERE server_id=$1),0)) RETURNING id,server_id,name,channel_type,position",
+    )
+    .bind(server_id)
+    .bind(name)
+    .bind(kind)
+    .fetch_one(&db)
+    .await
+    .map_err(|_| error(StatusCode::CONFLICT, "channel_create_failed"))?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+async fn list_channels(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(server_id): Path<Uuid>,
+) -> Result<Json<Vec<ChannelView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account = authenticated_account_id(&db, &headers).await?;
+    require_server_member(&db, server_id, account).await?;
+    let rows = sqlx::query_as::<_, ChannelView>(
+        "SELECT id,server_id,name,channel_type,position FROM server_channels WHERE server_id=$1 ORDER BY position,id",
+    )
+    .bind(server_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(rows))
+}
+
+async fn list_channel_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(channel_id): Path<Uuid>,
+) -> Result<Json<Vec<ChannelMessageView>>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account = authenticated_account_id(&db, &headers).await?;
+    let server_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT server_id FROM server_channels WHERE id=$1")
+            .bind(channel_id)
+            .fetch_optional(&db)
+            .await
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
+    require_server_member(&db, server_id, account).await?;
+    let rows = sqlx::query_as::<_, ChannelMessageView>(
+        "SELECT m.id,m.channel_id,m.author_id,a.username,m.content,m.created_at FROM channel_messages m JOIN accounts a ON a.id=m.author_id WHERE m.channel_id=$1 AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 100",
+    )
+    .bind(channel_id)
+    .fetch_all(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok(Json(rows.into_iter().rev().collect()))
+}
+
+async fn send_channel_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(channel_id): Path<Uuid>,
+    Json(input): Json<CreateChannelMessageRequest>,
+) -> Result<(StatusCode, Json<ChannelMessageView>), (StatusCode, Json<ErrorResponse>)> {
+    let db = state
+        .db
+        .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account = authenticated_account_id(&db, &headers).await?;
+    if !valid_direct_message(&input.content) {
+        return Err(error(StatusCode::BAD_REQUEST, "message_content_invalid"));
+    }
+    let server_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT server_id FROM server_channels WHERE id=$1")
+            .bind(channel_id)
+            .fetch_optional(&db)
+            .await
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
+    require_server_member(&db, server_id, account).await?;
+    let can_send = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM server_members m JOIN server_roles r ON r.id=m.role_id WHERE m.server_id=$1 AND m.account_id=$2 AND 'send_messages'=ANY(r.permissions))",
+    )
+    .bind(server_id)
+    .bind(account)
+    .fetch_one(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    if !can_send {
+        return Err(error(StatusCode::FORBIDDEN, "send_messages_forbidden"));
+    }
+    let row = sqlx::query_as::<_, ChannelMessageView>(
+        "INSERT INTO channel_messages(channel_id,author_id,content) VALUES($1,$2,$3) RETURNING id,channel_id,author_id,(SELECT username FROM accounts WHERE id=author_id) AS username,content,created_at",
+    )
+    .bind(channel_id)
+    .bind(account)
+    .bind(input.content.trim())
+    .fetch_one(&db)
+    .await
+    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
 #[derive(Serialize)]
 struct WsTicketResponse {
     ticket: String,
@@ -848,6 +1118,15 @@ async fn main() {
         .route("/auth/me", get(me))
         .route("/auth/profile", axum::routing::patch(update_profile))
         .route("/auth/logout", post(logout))
+        .route("/servers", get(list_servers).post(create_server))
+        .route(
+            "/servers/:server_id/channels",
+            get(list_channels).post(create_channel),
+        )
+        .route(
+            "/channels/:channel_id/messages",
+            get(list_channel_messages).post(send_channel_message),
+        )
         .route("/friends", get(list_friends))
         .route(
             "/friends/requests",
