@@ -72,7 +72,9 @@ async fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
-    let addr: SocketAddr = format!("{host}:{port}").parse().expect("valid listen address");
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .expect("valid listen address");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
