@@ -141,8 +141,8 @@ export default function App() {
     setDmMessages(current=>current.some(message=>message.id===result.id)?current:[...current,result]);
   }
   useEffect(()=>{
-    const activeFriend = selectedFriend;
-    if(!token||!activeFriend||page!=='dm')return;
+    if(!token||!selectedFriend||page!=='dm')return;
+    const activeFriendId = selectedFriend.id;
     let socket:WebSocket|null=null;let cancelled=false;
     async function connect(){
       try{
@@ -152,7 +152,7 @@ export default function App() {
         socket=new WebSocket(endpoint.toString());
         socket.onmessage=event=>{try{
           const payload=JSON.parse(event.data);const message=payload.message as DirectMessage;
-          if(payload.event==='message.created'&&((message.sender_id===account?.id&&message.recipient_id===activeFriend.id)||(message.sender_id===activeFriend.id&&message.recipient_id===account?.id))){
+          if(payload.event==='message.created'&&((message.sender_id===account?.id&&message.recipient_id===activeFriendId)||(message.sender_id===activeFriendId&&message.recipient_id===account?.id))){
             setDmMessages(current=>current.some(item=>item.id===message.id)?current:[...current,message]);
           }
         }catch{/* Ignore malformed events. */}};
