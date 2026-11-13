@@ -7,10 +7,10 @@
 - [ ] Import final approved Chatty logo assets into all platform bundles
 
 ## Milestone 1 — Accounts and persistence
-- [ ] PostgreSQL schema and SQLx migrations
+- [x] Initial PostgreSQL schema and SQLx migration runner (accounts, profiles, sessions, friend requests)
 - [ ] Registration, login, email verification and session management
 - [ ] Argon2id password hashing, refresh-token rotation and account recovery
-- [ ] Profiles, friends and privacy controls
+- [ ] Profile and friend-request API endpoints, validation and privacy controls
 
 ## Milestone 2 — Servers and messaging
 - [ ] Servers, memberships, roles, permissions and channels
