@@ -9,7 +9,8 @@ Chatty is a cross-platform community and messaging app in development. The backe
 - Login using email or username.
 - Random bearer sessions; only SHA-256 token hashes are stored.
 - Authenticated account lookup and logout/session revocation.
-- Authenticated profile editing for display name and short bio.
+- Authenticated profile editing for display name, bio, avatar URL, banner URL and status text. Profile image URLs are HTTPS-only and validated by the API.
+- Login with email or username, registration confirmation for matching passwords, and tab-session restoration after a page reload.
 - Chat composer with Unicode emoji picker, Tenor GIF search handoff and inline GIF previews for approved Tenor/GIPHY media hosts. 
 - Clickable HTTP(S) links and Shift+Enter multi-line message composition.
 - Friend requests with incoming/outgoing lists, accept/decline actions and accepted-friends listing.\n- Persistent one-to-one direct messages restricted to accepted friends.\n- Authenticated WebSocket tickets and per-user live message events.
@@ -46,10 +47,10 @@ The API defaults to `127.0.0.1:8080`. The web client uses that address unless `V
 | POST | `/auth/register` | No | Create account and session |
 | POST | `/auth/login` | No | Sign in with email or username |
 | GET | `/auth/me` | Bearer | Get the signed-in account |
-| PATCH | `/auth/profile` | Bearer | Update display name and bio |
+| PATCH | `/auth/profile` | Bearer | Update display name, bio, avatar, banner and status |
 | POST | `/auth/logout` | Bearer | Revoke current session |\n| GET | `/friends` | Bearer | List accepted friends |\n| GET/POST | `/friends/requests` | Bearer | List or send friend requests |\n| POST | `/friends/requests/:id/accept` | Bearer | Accept an incoming request |\n| POST | `/friends/requests/:id/decline` | Bearer | Decline an incoming request |\n| GET/POST | `/dm/:peer_id/messages` | Bearer | Read or send direct messages |\n| POST | `/auth/ws-ticket` | Bearer | Create a short-lived, single-use WebSocket ticket |\n| GET | `/ws?ticket=...` | Ticket | Receive live message events for the authenticated account |
 
-Registration expects `email`, `username` and `password`. Usernames are 3–24 characters and use letters, numbers or underscores. Passwords must be 10–128 characters. Profile display names are limited to 32 characters and bios to 280 characters.
+Registration expects `email`, `username` and `password`. Usernames are 3–24 characters and use letters, numbers or underscores. Passwords must be 10–128 characters. Profile display names are limited to 32 characters, bios to 280 characters, status text to 80 characters, and avatar/banner URLs to 2048 characters. Profile image URLs must use HTTPS. The web client keeps the session token in sessionStorage so a reload in the same tab can restore the session; closing the tab ends that browser-side session.
 
 ## Important limitations
 
