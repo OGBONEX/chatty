@@ -9,7 +9,7 @@ Chatty is a cross-platform community and messaging app in development. The backe
 - Login using email or username.
 - Random bearer sessions; only SHA-256 token hashes are stored.
 - Authenticated account lookup and logout/session revocation.
-- Authenticated profile editing for display name and short bio.
+- Authenticated profile editing for display name and short bio.\n- Friend requests with incoming/outgoing lists, accept/decline actions and accepted-friends listing.\n- Persistent one-to-one direct messages restricted to accepted friends.\n- Authenticated WebSocket tickets and per-user live message events.
 - React registration/login screens and account settings.
 - GitHub Actions checks for Rust formatting, Clippy, Rust tests and the web production build.
 
@@ -44,12 +44,12 @@ The API defaults to `127.0.0.1:8080`. The web client uses that address unless `V
 | POST | `/auth/login` | No | Sign in with email or username |
 | GET | `/auth/me` | Bearer | Get the signed-in account |
 | PATCH | `/auth/profile` | Bearer | Update display name and bio |
-| POST | `/auth/logout` | Bearer | Revoke current session |
+| POST | `/auth/logout` | Bearer | Revoke current session |\n| GET | `/friends` | Bearer | List accepted friends |\n| GET/POST | `/friends/requests` | Bearer | List or send friend requests |\n| POST | `/friends/requests/:id/accept` | Bearer | Accept an incoming request |\n| POST | `/friends/requests/:id/decline` | Bearer | Decline an incoming request |\n| GET/POST | `/dm/:peer_id/messages` | Bearer | Read or send direct messages |\n| POST | `/auth/ws-ticket` | Bearer | Create a short-lived, single-use WebSocket ticket |\n| GET | `/ws?ticket=...` | Ticket | Receive live message events for the authenticated account |
 
 Registration expects `email`, `username` and `password`. Usernames are 3–24 characters and use letters, numbers or underscores. Passwords must be 10–128 characters. Profile display names are limited to 32 characters and bios to 280 characters.
 
 ## Important limitations
 
-This is an early development build, not a production-ready chat service. Messages are still local demo data; friend requests, servers, channels, permissions and real-time messaging are not yet connected. Email verification, password recovery, session refresh/rotation, rate limiting, secure browser cookies, production CORS configuration, moderation and media handling remain future work. Voice/video, bots, native Tauri packaging and signed automatic updates remain on the roadmap.
+This is an early development build, not a production-ready chat service. Channel messages are still local demo data. Friend requests and one-to-one direct messages are connected; servers, channels, roles, permissions and channel real-time messaging are not yet implemented. Email verification, password recovery, session refresh/rotation, rate limiting, secure browser cookies, production CORS configuration, moderation and media handling remain future work. Voice/video, bots, native Tauri packaging and signed automatic updates remain on the roadmap.
 
 The browser currently keeps the bearer token in memory, so a page reload signs the user out. Do not deploy the API publicly: the current permissive CORS configuration is intended only for local development. See [Security](docs/SECURITY.md), [Architecture](docs/ARCHITECTURE.md) and [Roadmap](docs/ROADMAP.md).
