@@ -627,10 +627,7 @@ async fn send_direct_message(
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account_id = authenticated_account_id(&db, &headers).await?;
     if !valid_direct_message(&input.content) {
-        return Err(error(
-            StatusCode::BAD_REQUEST,
-            "message_content_invalid",
-        ));
+        return Err(error(StatusCode::BAD_REQUEST, "message_content_invalid"));
     }
     let content = input.content.trim().to_owned();
     if peer_id == account_id {
