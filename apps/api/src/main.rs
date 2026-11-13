@@ -319,7 +319,10 @@ async fn update_profile(
     {
         return Err(error(StatusCode::BAD_REQUEST, "display_name_too_long"));
     }
-    if bio.as_ref().is_some_and(|value| value.chars().count() > 280) {
+    if bio
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 280)
+    {
         return Err(error(StatusCode::BAD_REQUEST, "bio_too_long"));
     }
 

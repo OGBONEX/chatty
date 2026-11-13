@@ -12,7 +12,8 @@
 - [x] Web registration and login screens connected to the API
 - [ ] Email verification, password reset and refresh-token rotation
 - [ ] Rate limiting, abuse protection and production cookie/session hardening
-- [ ] Profile editing and friend-request API endpoints
+- [x] Authenticated profile editing API and account-settings form
+- [ ] Friend-request API endpoints
 
 ## Milestone 2 — Servers and messaging
 - [ ] Servers, memberships, roles, permissions and channels
