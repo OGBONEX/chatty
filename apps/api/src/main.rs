@@ -3,7 +3,7 @@ use argon2::{
     Argon2,
 };
 use axum::{
-    extract::{Path, State, ws::{Message, WebSocket, WebSocketUpgrade}},
+    extract::{Path, Query, State, ws::{Message, WebSocket, WebSocketUpgrade}},
     http::{header::AUTHORIZATION, HeaderMap, StatusCode},
     response::Response,
     routing::{get, post},
@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use futures_util::SinkExt;
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
-use std::{env, net::SocketAddr};
-use tokio::sync::broadcast;
+use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Instant};
+use tokio::sync::{broadcast, Mutex};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
@@ -25,6 +25,7 @@ use uuid::Uuid;
 struct AppState {
     db: Option<PgPool>,
     events: broadcast::Sender<String>,
+    ws_tickets: Arc<Mutex<HashMap<String, (Uuid, Instant)>>>,
 }
 
 #[derive(Serialize)]
@@ -614,22 +615,53 @@ async fn send_direct_message(
     Ok((StatusCode::CREATED, Json(message)))
 }
 
-async fn websocket_handler(
+#[derive(Serialize)]
+struct WsTicketResponse { ticket: String }
+
+#[derive(Deserialize)]
+struct WsTicketQuery { ticket: String }
+
+async fn create_ws_ticket(
     State(state): State<AppState>,
     headers: HeaderMap,
-    ws: WebSocketUpgrade,
-) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
-    let db = state.db.ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
-    authenticated_account_id(&db, &headers).await?;
-    let receiver = state.events.subscribe();
-    Ok(ws.on_upgrade(move |socket| websocket_connection(socket, receiver)))
+) -> Result<Json<WsTicketResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let db = state.db.as_ref().ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
+    let account_id = authenticated_account_id(db, &headers).await?;
+    let ticket = Uuid::new_v4().to_string() + &Uuid::new_v4().simple().to_string();
+    let mut tickets = state.ws_tickets.lock().await;
+    tickets.retain(|_, (_, expires)| *expires > Instant::now());
+    tickets.insert(ticket.clone(), (account_id, Instant::now() + std::time::Duration::from_secs(60)));
+    Ok(Json(WsTicketResponse { ticket }))
 }
 
-async fn websocket_connection(mut socket: WebSocket, mut receiver: broadcast::Receiver<String>) {
+async fn websocket_handler(
+    State(state): State<AppState>,
+    Query(query): Query<WsTicketQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let account_id = {
+        let mut tickets = state.ws_tickets.lock().await;
+        tickets.retain(|_, (_, expires)| *expires > Instant::now());
+        tickets.remove(&query.ticket).map(|(account_id, _)| account_id)
+    }.ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_or_expired_ws_ticket"))?;
+    let receiver = state.events.subscribe();
+    Ok(ws.on_upgrade(move |socket| websocket_connection(socket, receiver, account_id)))
+}
+
+async fn websocket_connection(mut socket: WebSocket, mut receiver: broadcast::Receiver<String>, account_id: Uuid) {
     loop {
         tokio::select! {
             event = receiver.recv() => match event {
-                Ok(payload) => if socket.send(Message::Text(payload)).await.is_err() { break; },
+                Ok(payload) => {
+                    let visible = serde_json::from_str::<serde_json::Value>(&payload).ok()
+                        .and_then(|value| {
+                            let message = value.get("message")?;
+                            let sender = message.get("sender_id")?.as_str()?;
+                            let recipient = message.get("recipient_id")?.as_str()?;
+                            Some(sender == account_id.to_string() || recipient == account_id.to_string())
+                        }).unwrap_or(false);
+                    if visible && socket.send(Message::Text(payload)).await.is_err() { break; }
+                },
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
             },
@@ -685,8 +717,9 @@ async fn main() {
         .route("/friends/requests/:id/accept", post(accept_friend_request))
         .route("/friends/requests/:id/decline", post(decline_friend_request))
         .route("/dm/:peer_id/messages", get(list_direct_messages).post(send_direct_message))
+        .route("/auth/ws-ticket", post(create_ws_ticket))
         .route("/ws", get(websocket_handler))
-        .with_state(AppState { db, events })
+        .with_state(AppState { db, events, ws_tickets: Arc::new(Mutex::new(HashMap::new())) })
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http());
 
