@@ -13,12 +13,14 @@
 - [ ] Email verification, password reset and refresh-token rotation
 - [ ] Rate limiting, abuse protection and production cookie/session hardening
 - [x] Authenticated profile editing API and account-settings form
-- [ ] Friend-request API endpoints
+- [x] Friend-request API endpoints and web UI (send, list, accept/decline)
 
 ## Milestone 2 — Servers and messaging
 - [ ] Servers, memberships, roles, permissions and channels
 - [x] Persistent one-to-one direct messages and conversation history\n- [ ] Message edits, deletes, reactions, replies and attachments
 - [x] Authenticated WebSocket delivery for direct-message events\n- [ ] Presence, typing and unread counts
+- [x] Emoji picker, Tenor GIF link sharing and inline GIF previews in the web composer
+- [x] Clickable HTTP(S) message links and multi-line message composition
 - [ ] Search, moderation logs and reporting
 
 ## Milestone 3 — Voice and community
