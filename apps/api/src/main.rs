@@ -131,7 +131,8 @@ fn valid_profile_url(value: &str) -> bool {
     value.is_empty()
         || (value.len() <= 2048
             && value.starts_with("https://")
-            && !value.chars().any(char::is_whitespace))
+            && !value.chars().any(char::is_whitespace)
+            && !value.chars().any(|c| matches!(c, '"' | '\\' | '<' | '>' | '(' | ')')))
 }
 
 fn valid_direct_message(content: &str) -> bool {
@@ -891,6 +892,16 @@ mod tests {
         assert_ne!(encoded, "a-long-test-password");
         assert!(verify_password("a-long-test-password", &encoded));
         assert!(!verify_password("wrong-password", &encoded));
+    }
+
+    #[test]
+    fn profile_image_urls_require_https_and_safe_characters() {
+        assert!(valid_profile_url(""));
+        assert!(valid_profile_url("https://example.com/avatar.png"));
+        assert!(!valid_profile_url("http://example.com/avatar.png"));
+        assert!(!valid_profile_url("javascript:alert(1)"));
+        assert!(!valid_profile_url("https://example.com/\" onerror=alert(1)"));
+        assert!(!valid_profile_url("https://example.com/a b.png"));
     }
 
     #[test]
