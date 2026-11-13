@@ -769,6 +769,7 @@ mod tests {
     fn direct_messages_reject_empty_and_oversized_content() {
         assert!(!valid_direct_message("   "));
         assert!(valid_direct_message("hello"));
+        assert!(valid_direct_message(&"x".repeat(4000)));
         assert!(!valid_direct_message(&"x".repeat(4001)));
     }
 
