@@ -7,7 +7,10 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::{header::{AUTHORIZATION, CONTENT_TYPE}, HeaderValue, HeaderMap, Method, StatusCode},
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderMap, HeaderValue, Method, StatusCode,
+    },
     response::Response,
     routing::{get, post},
     Json, Router,
@@ -1155,7 +1158,9 @@ async fn main() {
                 .split(',')
                 .map(str::trim)
                 .filter(|origin| !origin.is_empty())
-                .map(|origin| HeaderValue::from_str(origin).expect("valid CHATTY_ALLOWED_ORIGINS entry"))
+                .map(|origin| {
+                    HeaderValue::from_str(origin).expect("valid CHATTY_ALLOWED_ORIGINS entry")
+                })
                 .collect::<Vec<_>>();
             CorsLayer::new()
                 .allow_origin(allowed_origins)
