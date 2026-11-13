@@ -17,8 +17,8 @@
 
 ## Milestone 2 — Servers and messaging
 - [ ] Servers, memberships, roles, permissions and channels
-- [ ] Persistent messages, edits, deletes, reactions, replies and attachments
-- [ ] WebSocket gateway, presence, typing and unread counts
+- [x] Persistent one-to-one direct messages and conversation history\n- [ ] Message edits, deletes, reactions, replies and attachments
+- [x] Authenticated WebSocket delivery for direct-message events\n- [ ] Presence, typing and unread counts
 - [ ] Search, moderation logs and reporting
 
 ## Milestone 3 — Voice and community
