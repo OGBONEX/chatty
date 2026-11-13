@@ -132,7 +132,9 @@ fn valid_profile_url(value: &str) -> bool {
         || (value.len() <= 2048
             && value.starts_with("https://")
             && !value.chars().any(char::is_whitespace)
-            && !value.chars().any(|c| matches!(c, '"' | '\\' | '<' | '>' | '(' | ')')))
+            && !value
+                .chars()
+                .any(|c| matches!(c, '"' | '\\' | '<' | '>' | '(' | ')')))
 }
 
 fn valid_direct_message(content: &str) -> bool {
@@ -356,8 +358,12 @@ async fn update_profile(
     let banner_url = input.banner_url.map(|value| value.trim().to_owned());
     let status_text = input.status_text.map(|value| value.trim().to_owned());
 
-    if display_name.is_none() && bio.is_none() && avatar_url.is_none()
-        && banner_url.is_none() && status_text.is_none() {
+    if display_name.is_none()
+        && bio.is_none()
+        && avatar_url.is_none()
+        && banner_url.is_none()
+        && status_text.is_none()
+    {
         return Err(error(StatusCode::BAD_REQUEST, "profile_fields_required"));
     }
     if display_name
@@ -372,13 +378,22 @@ async fn update_profile(
     {
         return Err(error(StatusCode::BAD_REQUEST, "bio_too_long"));
     }
-    if avatar_url.as_ref().is_some_and(|value| !valid_profile_url(value)) {
+    if avatar_url
+        .as_ref()
+        .is_some_and(|value| !valid_profile_url(value))
+    {
         return Err(error(StatusCode::BAD_REQUEST, "avatar_url_invalid"));
     }
-    if banner_url.as_ref().is_some_and(|value| !valid_profile_url(value)) {
+    if banner_url
+        .as_ref()
+        .is_some_and(|value| !valid_profile_url(value))
+    {
         return Err(error(StatusCode::BAD_REQUEST, "banner_url_invalid"));
     }
-    if status_text.as_ref().is_some_and(|value| value.chars().count() > 80) {
+    if status_text
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 80)
+    {
         return Err(error(StatusCode::BAD_REQUEST, "status_text_too_long"));
     }
 
@@ -900,7 +915,9 @@ mod tests {
         assert!(valid_profile_url("https://example.com/avatar.png"));
         assert!(!valid_profile_url("http://example.com/avatar.png"));
         assert!(!valid_profile_url("javascript:alert(1)"));
-        assert!(!valid_profile_url("https://example.com/\" onerror=alert(1)"));
+        assert!(!valid_profile_url(
+            "https://example.com/\" onerror=alert(1)"
+        ));
         assert!(!valid_profile_url("https://example.com/a b.png"));
     }
 
