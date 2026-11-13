@@ -48,8 +48,9 @@ CREATE TABLE friend_requests (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT friend_requests_not_self CHECK (sender_id <> recipient_id)
 );
-CREATE UNIQUE INDEX friend_requests_one_directional_pair
-    ON friend_requests (sender_id, recipient_id)
+-- Prevent duplicate pending requests in either direction for the same pair.
+CREATE UNIQUE INDEX friend_requests_one_pending_pair
+    ON friend_requests (LEAST(sender_id, recipient_id), GREATEST(sender_id, recipient_id))
     WHERE status = 'pending';
 CREATE INDEX friend_requests_recipient_pending_idx
     ON friend_requests (recipient_id, created_at DESC)
