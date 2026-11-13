@@ -85,7 +85,8 @@ export default function App() {
       setProfileBannerUrl(auth.account.banner_url ?? '');
       setProfileStatusText(auth.account.status_text ?? '');
       setProfileStatus('');
-      await refreshSocial(auth.token);\n      await loadServers(auth.token);
+      await refreshSocial(auth.token);
+      await loadServers(auth.token);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message.replaceAll('_', ' ') : 'Could not connect to Chatty. Check that the API is running.');
     } finally {
@@ -150,7 +151,8 @@ export default function App() {
         setProfileAvatarUrl(restored.avatar_url ?? '');
         setProfileBannerUrl(restored.banner_url ?? '');
         setProfileStatusText(restored.status_text ?? '');
-        await refreshSocial(savedToken);\n        await loadServers(savedToken);
+        await refreshSocial(savedToken);
+        await loadServers(savedToken);
       } catch {
         sessionStorage.removeItem('chatty_token');
       } finally {
