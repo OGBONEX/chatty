@@ -56,12 +56,18 @@ struct LoginRequest {
 struct ProfileUpdateRequest {
     display_name: Option<String>,
     bio: Option<String>,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+    status_text: Option<String>,
 }
 
 #[derive(Serialize)]
 struct ProfileResponse {
     display_name: Option<String>,
     bio: String,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+    status_text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -70,6 +76,10 @@ struct AccountResponse {
     email: String,
     username: String,
     display_name: Option<String>,
+    bio: String,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+    status_text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -115,6 +125,16 @@ fn valid_username(value: &str) -> bool {
         && value
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+}
+
+fn valid_profile_url(value: &str) -> bool {
+    value.is_empty()
+        || (value.len() <= 2048
+            && value.starts_with("https://")
+            && !value.chars().any(char::is_whitespace)
+            && !value
+                .chars()
+                .any(|c| matches!(c, '"' | '\\' | '<' | '>' | '(' | ')')))
 }
 
 fn valid_direct_message(content: &str) -> bool {
@@ -229,6 +249,10 @@ async fn register(
                 email: account.1,
                 username: account.2,
                 display_name: None,
+                bio: String::new(),
+                avatar_url: None,
+                banner_url: None,
+                status_text: None,
             },
         }),
     ))
@@ -242,8 +266,8 @@ async fn login(
         .db
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let login = input.login.trim().to_lowercase();
-    let account = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>)>(
-        "SELECT a.id, a.email, a.username, a.password_hash, p.display_name FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id WHERE a.email = $1 OR a.username = $1 ORDER BY CASE WHEN a.email = $1 THEN 0 ELSE 1 END LIMIT 1"
+    let account = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT a.id, a.email, a.username, a.password_hash, p.display_name, p.bio, p.avatar_url, p.banner_url, p.status_text FROM accounts a LEFT JOIN profiles p ON p.account_id = a.id WHERE a.email = $1 OR a.username = $1 ORDER BY CASE WHEN a.email = $1 THEN 0 ELSE 1 END LIMIT 1"
     )
     .bind(&login)
     .fetch_optional(&db)
@@ -272,6 +296,10 @@ async fn login(
             email: account.1,
             username: account.2,
             display_name: account.4,
+            bio: account.5,
+            avatar_url: account.6,
+            banner_url: account.7,
+            status_text: account.8,
         },
     }))
 }
@@ -293,8 +321,8 @@ async fn me(
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let token = bearer_token(&headers)
         .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
-    let account = sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-        "SELECT a.id, a.email, a.username, p.display_name FROM sessions s JOIN accounts a ON a.id = s.account_id LEFT JOIN profiles p ON p.account_id = a.id WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()"
+    let account = sqlx::query_as::<_, (Uuid, String, String, Option<String>, String, Option<String>, Option<String>, Option<String>)>(
+        "SELECT a.id, a.email, a.username, p.display_name, p.bio, p.avatar_url, p.banner_url, p.status_text FROM sessions s JOIN accounts a ON a.id = s.account_id LEFT JOIN profiles p ON p.account_id = a.id WHERE s.refresh_token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()"
     )
     .bind(hash_token(token))
     .fetch_optional(&db)
@@ -307,6 +335,10 @@ async fn me(
         email: account.1,
         username: account.2,
         display_name: account.3,
+        bio: account.4,
+        avatar_url: account.5,
+        banner_url: account.6,
+        status_text: account.7,
     }))
 }
 
@@ -322,8 +354,16 @@ async fn update_profile(
         .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "authentication_required"))?;
     let display_name = input.display_name.map(|value| value.trim().to_owned());
     let bio = input.bio.map(|value| value.trim().to_owned());
+    let avatar_url = input.avatar_url.map(|value| value.trim().to_owned());
+    let banner_url = input.banner_url.map(|value| value.trim().to_owned());
+    let status_text = input.status_text.map(|value| value.trim().to_owned());
 
-    if display_name.is_none() && bio.is_none() {
+    if display_name.is_none()
+        && bio.is_none()
+        && avatar_url.is_none()
+        && banner_url.is_none()
+        && status_text.is_none()
+    {
         return Err(error(StatusCode::BAD_REQUEST, "profile_fields_required"));
     }
     if display_name
@@ -338,6 +378,24 @@ async fn update_profile(
     {
         return Err(error(StatusCode::BAD_REQUEST, "bio_too_long"));
     }
+    if avatar_url
+        .as_ref()
+        .is_some_and(|value| !valid_profile_url(value))
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "avatar_url_invalid"));
+    }
+    if banner_url
+        .as_ref()
+        .is_some_and(|value| !valid_profile_url(value))
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "banner_url_invalid"));
+    }
+    if status_text
+        .as_ref()
+        .is_some_and(|value| value.chars().count() > 80)
+    {
+        return Err(error(StatusCode::BAD_REQUEST, "status_text_too_long"));
+    }
 
     let account_id = sqlx::query_scalar::<_, Uuid>(
         "SELECT account_id FROM sessions WHERE refresh_token_hash = $1 AND revoked_at IS NULL AND expires_at > now()",
@@ -348,12 +406,15 @@ async fn update_profile(
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
     .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "invalid_session"))?;
 
-    let profile = sqlx::query_as::<_, (Option<String>, String)>(
-        "UPDATE profiles SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), updated_at = now() WHERE account_id = $1 RETURNING display_name, bio",
+    let profile = sqlx::query_as::<_, (Option<String>, String, Option<String>, Option<String>, Option<String>)>(
+        "UPDATE profiles SET display_name = COALESCE($2, display_name), bio = COALESCE($3, bio), avatar_url = COALESCE($4, avatar_url), banner_url = COALESCE($5, banner_url), status_text = COALESCE($6, status_text), updated_at = now() WHERE account_id = $1 RETURNING display_name, bio, avatar_url, banner_url, status_text",
     )
     .bind(account_id)
     .bind(display_name)
     .bind(bio)
+    .bind(avatar_url)
+    .bind(banner_url)
+    .bind(status_text)
     .fetch_one(&db)
     .await
     .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?;
@@ -361,6 +422,9 @@ async fn update_profile(
     Ok(Json(ProfileResponse {
         display_name: profile.0,
         bio: profile.1,
+        avatar_url: profile.2,
+        banner_url: profile.3,
+        status_text: profile.4,
     }))
 }
 
@@ -843,6 +907,18 @@ mod tests {
         assert_ne!(encoded, "a-long-test-password");
         assert!(verify_password("a-long-test-password", &encoded));
         assert!(!verify_password("wrong-password", &encoded));
+    }
+
+    #[test]
+    fn profile_image_urls_require_https_and_safe_characters() {
+        assert!(valid_profile_url(""));
+        assert!(valid_profile_url("https://example.com/avatar.png"));
+        assert!(!valid_profile_url("http://example.com/avatar.png"));
+        assert!(!valid_profile_url("javascript:alert(1)"));
+        assert!(!valid_profile_url(
+            "https://example.com/\" onerror=alert(1)"
+        ));
+        assert!(!valid_profile_url("https://example.com/a b.png"));
     }
 
     #[test]
