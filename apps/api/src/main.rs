@@ -12,7 +12,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::{collections::HashMap, env, net::SocketAddr, sync::Arc, time::Instant};
@@ -114,7 +114,7 @@ fn valid_username(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
 }
 
-fn hash_token(token: &str) -> String {
+fn valid_direct_message(content: &str) -> bool {\n    let trimmed = content.trim();\n    !trimmed.is_empty() && trimmed.chars().count() <= 4000\n}\n\nfn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
@@ -665,7 +665,7 @@ async fn websocket_connection(mut socket: WebSocket, mut receiver: broadcast::Re
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
             },
-            incoming = socket.recv() => match incoming {
+            incoming = socket.next() => match incoming {
                 Some(Ok(Message::Close(_))) | None => break,
                 Some(Err(_)) => break,
                 _ => {}
