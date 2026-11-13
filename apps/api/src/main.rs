@@ -940,14 +940,13 @@ async fn list_channel_messages(
         .db
         .ok_or_else(|| error(StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"))?;
     let account = authenticated_account_id(&db, &headers).await?;
-    let server_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT server_id FROM server_channels WHERE id=$1",
-    )
-    .bind(channel_id)
-    .fetch_optional(&db)
-    .await
-    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
-    .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
+    let server_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT server_id FROM server_channels WHERE id=$1")
+            .bind(channel_id)
+            .fetch_optional(&db)
+            .await
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
     require_server_member(&db, server_id, account).await?;
     let rows = sqlx::query_as::<_, ChannelMessageView>(
         "SELECT m.id,m.channel_id,m.author_id,a.username,m.content,m.created_at FROM channel_messages m JOIN accounts a ON a.id=m.author_id WHERE m.channel_id=$1 AND m.deleted_at IS NULL ORDER BY m.created_at DESC LIMIT 100",
@@ -1122,8 +1121,14 @@ async fn main() {
         .route("/auth/profile", axum::routing::patch(update_profile))
         .route("/auth/logout", post(logout))
         .route("/servers", get(list_servers).post(create_server))
-        .route("/servers/:server_id/channels", get(list_channels).post(create_channel))
-        .route("/channels/:channel_id/messages", get(list_channel_messages).post(send_channel_message))
+        .route(
+            "/servers/:server_id/channels",
+            get(list_channels).post(create_channel),
+        )
+        .route(
+            "/channels/:channel_id/messages",
+            get(list_channel_messages).post(send_channel_message),
+        )
         .route("/friends", get(list_friends))
         .route(
             "/friends/requests",
