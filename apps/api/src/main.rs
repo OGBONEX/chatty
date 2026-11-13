@@ -7,7 +7,10 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        HeaderMap, HeaderValue, Method, StatusCode,
+    },
     response::Response,
     routing::{get, post},
     Json, Router,
@@ -1109,7 +1112,7 @@ async fn main() {
         }
     };
 
-    // Permissive CORS is for local development only; configure an origin allowlist before deployment.
+    // Configure explicit browser origins with CHATTY_ALLOWED_ORIGINS (comma-separated).
     let (events, _) = broadcast::channel(512);
     let app = Router::new()
         .route("/health", get(health))
@@ -1148,11 +1151,27 @@ async fn main() {
             events,
             ws_tickets: Arc::new(Mutex::new(HashMap::new())),
         })
-        .layer(CorsLayer::permissive())
+        .layer({
+            let origins = env::var("CHATTY_ALLOWED_ORIGINS")
+                .unwrap_or_else(|_| "http://localhost:5173,http://127.0.0.1:5173".into());
+            let allowed_origins = origins
+                .split(',')
+                .map(str::trim)
+                .filter(|origin| !origin.is_empty())
+                .map(|origin| {
+                    HeaderValue::from_str(origin).expect("valid CHATTY_ALLOWED_ORIGINS entry")
+                })
+                .collect::<Vec<_>>();
+            CorsLayer::new()
+                .allow_origin(allowed_origins)
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::OPTIONS])
+                .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+        })
         .layer(TraceLayer::new_for_http());
 
-    let host = env::var("CHATTY_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+    let host = env::var("CHATTY_HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port = env::var("CHATTY_PORT")
+        .or_else(|_| env::var("PORT"))
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(8080);
