@@ -17,6 +17,32 @@ Chatty is a cross-platform community and messaging app in development. The backe
 - React registration/login screens and account settings.
 - GitHub Actions checks for Rust formatting, Clippy, Rust tests and the web production build.
 
+## Cross-platform clients
+
+Chatty now shares its React/TypeScript client across browser and native mobile shells.
+
+- **Web / desktop:** the web app is an installable Progressive Web App (PWA). In a supported browser, use the browser's Install app option on Windows, macOS or Linux. It includes an offline app-shell fallback; authenticated API calls and messaging still require a network connection.
+- **Android:** Capacitor configuration is included. GitHub Actions creates a debug APK and publishes it as the `chatty-android-debug-apk` workflow artifact.
+- **iOS:** Capacitor configuration is included. GitHub Actions builds an unsigned iOS Simulator app. A signed device/App Store release still requires Apple signing credentials and an Apple Developer account.
+- **Shared code:** browser and native clients use the same React interface and API. Native builds do not create a separate backend.
+
+### Build native clients locally
+
+Requirements: Node.js 22+, npm, and the Android SDK/JDK 21 for Android. iOS builds additionally require macOS and Xcode.
+
+```sh
+cd apps/web
+npm install
+npm run build
+npx cap add android   # run once
+npx cap sync android
+npx cap open android
+```
+
+For iOS on macOS, replace `android` with `ios` in the Capacitor commands.
+
+Set `VITE_API_BASE_URL` at build time to the public HTTPS URL of the deployed Chatty API. The current development default points to localhost and is only suitable for local web development; a phone cannot use the developer computer's localhost as its API. The API must be deployed and configured before distributing working mobile builds.
+
 ## Run locally
 
 Requirements: Rust stable, Node.js 22+, npm and PostgreSQL.
