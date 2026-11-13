@@ -1,10 +1,13 @@
-import { FormEvent, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { Bell, Hash, Headphones, MessageCircle, Plus, Search, Settings, Shield, Users, Volume2, ChevronDown, Send, Download, X, LogOut } from 'lucide-react';
 
 const API = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080';
 type Account = { id: string; email: string; username: string; display_name?: string | null };
 type AuthResult = { token: string; expires_at: string; account: Account };
 type Message = { name: string; text: string; time: string };
+type Friend = { id: string; username: string; display_name: string | null };
+type FriendRequest = { id: string; sender_id: string; sender_username: string; recipient_id: string; recipient_username: string; status: string; created_at: string };
+type DirectMessage = { id: string; sender_id: string; recipient_id: string; content: string; created_at: string };
 const seed: Message[] = [
   { name: 'Nova', time: '10:42', text: 'Welcome to the Chatty preview! This is the start of a new community.' },
   { name: 'PixelPilot', time: '10:44', text: 'The interface is taking shape. More features will arrive as the backend grows.' },
@@ -13,7 +16,13 @@ const seed: Message[] = [
 export default function App() {
   const [account, setAccount] = useState<Account | null>(null);
   const [token, setToken] = useState<string | null>(null);
-  const [page,setPage]=useState<'chat'|'settings'>('chat');
+  const [page,setPage]=useState<'chat'|'settings'|'friends'|'dm'>('chat');
+  const [friends,setFriends]=useState<Friend[]>([]);
+  const [friendRequests,setFriendRequests]=useState<FriendRequest[]>([]);
+  const [selectedFriend,setSelectedFriend]=useState<Friend|null>(null);
+  const [dmMessages,setDmMessages]=useState<DirectMessage[]>([]);
+  const [socialError,setSocialError]=useState('');
+  const [friendUsername,setFriendUsername]=useState('');
   const [channel,setChannel]=useState('general');
   const [messages,setMessages]=useState(seed);
   const [draft,setDraft]=useState('');
@@ -53,6 +62,7 @@ export default function App() {
       setProfileName(auth.account.display_name ?? '');
       setProfileBio('');
       setProfileStatus('');
+      await refreshSocial(auth.token);
     } catch (error) {
       setAuthError(error instanceof Error ? error.message.replaceAll('_', ' ') : 'Could not connect to Chatty. Check that the API is running.');
     } finally {
@@ -85,6 +95,72 @@ export default function App() {
     }
   }
 
+
+  async function refreshSocial(authToken = token) {
+    if (!authToken) return;
+    try {
+      const headers = { Authorization: `Bearer ${authToken}` };
+      const [friendResponse, requestResponse] = await Promise.all([
+        fetch(`${API}/friends`, { headers }),
+        fetch(`${API}/friends/requests`, { headers }),
+      ]);
+      if (!friendResponse.ok || !requestResponse.ok) throw new Error('Could not load friends');
+      setFriends(await friendResponse.json());
+      setFriendRequests(await requestResponse.json());
+      setSocialError('');
+    } catch (error) { setSocialError(error instanceof Error ? error.message : 'Could not load friends'); }
+  }
+  async function addFriend(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token) return; setSocialError('');
+    try {
+      const response = await fetch(`${API}/friends/requests`, { method:'POST', headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`}, body:JSON.stringify({username:friendUsername}) });
+      const result=await response.json(); if(!response.ok) throw new Error(result.error??'Could not send request');
+      setFriendUsername(''); await refreshSocial();
+    } catch(error) { setSocialError(error instanceof Error?error.message.replaceAll('_',' '):'Could not send request'); }
+  }
+  async function answerFriendRequest(id:string, action:'accept'|'decline') {
+    if(!token)return;
+    try {
+      const response=await fetch(`${API}/friends/requests/${id}/${action}`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});
+      if(!response.ok){const result=await response.json();throw new Error(result.error??'Could not update request');}
+      await refreshSocial();
+    } catch(error){setSocialError(error instanceof Error?error.message.replaceAll('_',' '):'Could not update request');}
+  }
+  async function openDirectMessage(friend:Friend) {
+    if(!token)return; setSocialError('');
+    try {
+      const response=await fetch(`${API}/dm/${friend.id}/messages`,{headers:{Authorization:`Bearer ${token}`}});
+      const result=await response.json(); if(!response.ok)throw new Error(result.error??'Could not load messages');
+      setSelectedFriend(friend);setDmMessages(result);setPage('dm');
+    } catch(error){setSocialError(error instanceof Error?error.message.replaceAll('_',' '):'Could not load messages');setPage('friends');}
+  }
+  async function sendDirectMessage(event:FormEvent<HTMLFormElement>,content:string) {
+    event.preventDefault();if(!token||!selectedFriend||!content.trim())return;
+    const response=await fetch(`${API}/dm/${selectedFriend.id}/messages`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({content})});
+    const result=await response.json();if(!response.ok){setSocialError(result.error?.replaceAll('_',' ')??'Could not send message');return;}
+    setDmMessages(current=>current.some(message=>message.id===result.id)?current:[...current,result]);
+  }
+  useEffect(()=>{
+    if(!token||!selectedFriend||page!=='dm')return;
+    let socket:WebSocket|null=null;let cancelled=false;
+    async function connect(){
+      try{
+        const response=await fetch(`${API}/auth/ws-ticket`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});
+        if(!response.ok)return;const {ticket}=await response.json();if(cancelled)return;
+        const endpoint=new URL('/ws',API);endpoint.protocol=endpoint.protocol==='https:'?'wss:':'ws:';endpoint.searchParams.set('ticket',ticket);
+        socket=new WebSocket(endpoint.toString());
+        socket.onmessage=event=>{try{
+          const payload=JSON.parse(event.data);const message=payload.message as DirectMessage;
+          if(payload.event==='message.created'&&((message.sender_id===account?.id&&message.recipient_id===selectedFriend.id)||(message.sender_id===selectedFriend.id&&message.recipient_id===account?.id))){
+            setDmMessages(current=>current.some(item=>item.id===message.id)?current:[...current,message]);
+          }
+        }catch{/* Ignore malformed events. */}};
+        socket.onclose=()=>{if(!cancelled)setSocialError('Live connection closed. Reopen the conversation to reconnect.');};
+      }catch{setSocialError('Live connection unavailable.');}
+    }
+    void connect();return()=>{cancelled=true;socket?.close();};
+  },[token,selectedFriend?.id,page,account?.id]);
+
   async function logout() {
     if (token) {
       try { await fetch(`${API}/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }); } catch { /* local sign-out still proceeds */ }
@@ -105,7 +181,8 @@ export default function App() {
     <aside className="servers"><button className="server-logo active">C</button><div className="server-divider"/><button className="server-logo"><Users/></button><button className="server-logo add"><Plus/></button></aside>
     <aside className="sidebar">
       <button className="workspace"><span className="brand-mark">C</span><span><b>Chatty</b><small>Community space</small></span><ChevronDown size={17}/></button>
-      <button className="nav-item"><MessageCircle size={18}/> Direct Messages</button>
+      <button className={'nav-item '+(page==='friends'||page==='dm'?'selected':'')} onClick={()=>{setPage('friends');void refreshSocial()}}><MessageCircle size={18}/> Direct Messages</button>
+      {friends.map(friend=><button key={friend.id} className="channel" onClick={()=>void openDirectMessage(friend)}><MessageCircle size={15}/>{friend.display_name||friend.username}</button>)}
       <div className="section-label">TEXT CHANNELS <Plus size={15}/></div>
       {['general','announcements','media','off-topic'].map(c=><button key={c} className={'channel '+(channel===c?'selected':'')} onClick={()=>{setChannel(c);setPage('chat')}}><Hash size={17}/>{c}</button>)}
       <div className="section-label voice-label">VOICE CHANNELS <Plus size={15}/></div>
@@ -115,10 +192,33 @@ export default function App() {
     <main className="main">
       <header className="topbar"><div className="channel-title"><Hash size={20}/><b>{page==='settings'?'User Settings':channel}</b></div><div className="top-actions"><label className="search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search local messages"/></label><button className="icon-button" title="Toggle notifications" onClick={()=>setNotifications(v=>!v)}><Bell size={19}/></button><button className="update-button" onClick={()=>setUpdateOpen(v=>!v)}><Download size={17}/> Updates</button><button className="icon-button" title="Settings" onClick={()=>setPage(page==='settings'?'chat':'settings')}><Settings size={19}/></button></div></header>
       {updateOpen&&<div className="update-popover"><button className="close" onClick={()=>setUpdateOpen(false)}><X size={16}/></button><b>Preview build</b><p>Chatty v0.1.0</p><small>Signed update delivery will be connected for desktop releases in a later milestone.</small></div>}
-      {page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2><label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label><label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label><div className="profile-form-footer"><small>{profileBio.length}/280 characters</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><p>{m.text}</p></div></article>)}</div><form className="composer" onSubmit={send}><input value={draft} onChange={e=>setDraft(e.target.value)} placeholder={'Message #'+channel}/><button className="send" type="submit"><Send size={18}/></button></form></section>}
-      <footer className="statusbar"><span><i/> Signed in · Messages are still local preview data</span><span>Chatty · 0.1.0</span></footer>
+      {page==='friends'?<FriendsPanel account={account} friends={friends} requests={friendRequests} username={friendUsername} setUsername={setFriendUsername} error={socialError} addFriend={addFriend} answer={answerFriendRequest} openDM={openDirectMessage}/>:page==='dm'&&selectedFriend?<DirectMessagePanel account={account} friend={selectedFriend} messages={dmMessages} error={socialError} send={sendDirectMessage} back={()=>setPage('friends')}/>:page==='settings'?<section className="settings-layout"><nav className="settings-nav"><h2>Settings</h2>{['My Account','Privacy & Safety','Appearance','Notifications','Voice & Video','Text & Messages','Keybinds','Activity','Language & Region','Accessibility','Storage','Advanced','Updates'].map(t=><button key={t} className={tab===t?'setting-active':''} onClick={()=>setTab(t)}>{t}</button>)}</nav><div className="settings-content"><h1>{tab}</h1><p className="muted">Manage your Chatty experience.</p>{tab==='My Account'?<><Setting title="Username" desc={account.username}/><Setting title="Email" desc={account.email}/><Setting title="Account ID" desc={account.id}/><form className="profile-form" onSubmit={saveProfile}><h2>Edit profile</h2><label>Display name<input value={profileName} onChange={event=>setProfileName(event.target.value)} maxLength={32} placeholder="How others see you"/></label><label>About me<textarea value={profileBio} onChange={event=>setProfileBio(event.target.value)} maxLength={280} rows={4} placeholder="Tell people a little about yourself"/></label><div className="profile-form-footer"><small>{profileBio.length}/280 characters</small><button className="auth-submit" disabled={profileBusy}>{profileBusy?'Saving…':'Save profile'}</button></div>{profileStatus&&<p className="profile-status" role="status">{profileStatus}</p>}</form></>:tab==='Appearance'?<><Setting title="Dark theme" desc="Use the dark interface."/><Toggle checked={dark} change={setDark}/><Setting title="Compact messages" desc="Reduce spacing between messages."/><Toggle checked={compact} change={setCompact}/></>:tab==='Notifications'?<><Setting title="In-app notifications" desc="Show notification indicators in Chatty."/><Toggle checked={notifications} change={setNotifications}/></>:tab==='Updates'?<Setting title="Application updates" desc="Signed update checks will be connected to platform releases."/>:<><Setting title="Settings section" desc="This page is reserved for the account and device preferences milestone."/><div className="notice"><Shield size={18}/> Security and privacy settings will be enforced by the API, not just the interface.</div></>}</div></section>:<section className="chat-area"><div className="welcome"><div className="welcome-icon"><Hash/></div><h1>Welcome to #{channel}</h1><p>This is the beginning of the #{channel} channel.</p></div><div className="messages">{shown.map((m,i)=><article className={'message '+(compact?'compact':'')} key={i}><div className="avatar">{m.name[0]}</div><div><div className="message-meta"><b>{m.name}</b><time>{m.time}</time></div><p>{m.text}</p></div></article>)}</div><form className="composer" onSubmit={send}><input value={draft} onChange={e=>setDraft(e.target.value)} placeholder={'Message #'+channel}/><button className="send" type="submit"><Send size={18}/></button></form></section>}
+      <footer className="statusbar"><span><i/> Signed in · Direct messages sync through PostgreSQL</span><span>Chatty · 0.1.0</span></footer>
     </main>
   </div>;
+}
+
+function FriendsPanel({account,friends,requests,username,setUsername,error,addFriend,answer,openDM}:{account:Account;friends:Friend[];requests:FriendRequest[];username:string;setUsername:(v:string)=>void;error:string;addFriend:(e:FormEvent<HTMLFormElement>)=>void;answer:(id:string,action:'accept'|'decline')=>void;openDM:(friend:Friend)=>void}) {
+  const incoming=requests.filter(request=>request.recipient_id===account.id);
+  const outgoing=requests.filter(request=>request.sender_id===account.id);
+  return <section className="social-page"><h1>Friends</h1><p className="muted">Add people by username and manage your requests.</p>
+    <form className="friend-add" onSubmit={addFriend}><input value={username} onChange={event=>setUsername(event.target.value)} placeholder="Enter a username" minLength={3} maxLength={24} required/><button className="auth-submit">Send request</button></form>
+    {error&&<p className="social-error" role="alert">{error}</p>}
+    <h2>Incoming requests <span>{incoming.length}</span></h2>
+    {incoming.length===0?<p className="muted">No incoming requests.</p>:incoming.map(request=><div className="social-row" key={request.id}><b>{request.sender_username}</b><div><button onClick={()=>answer(request.id,'accept')}>Accept</button><button className="secondary" onClick={()=>answer(request.id,'decline')}>Decline</button></div></div>)}
+    <h2>Sent requests <span>{outgoing.length}</span></h2>
+    {outgoing.length===0?<p className="muted">No pending sent requests.</p>:outgoing.map(request=><div className="social-row" key={request.id}><b>{request.recipient_username}</b><small>Pending</small></div>)}
+    <h2>All friends <span>{friends.length}</span></h2>
+    {friends.length===0?<p className="muted">Your accepted friends will appear here.</p>:friends.map(friend=><div className="social-row" key={friend.id}><b>{friend.display_name||friend.username}</b><button onClick={()=>openDM(friend)}>Message</button></div>)}
+  </section>;
+}
+function DirectMessagePanel({account,friend,messages,error,send,back}:{account:Account;friend:Friend;messages:DirectMessage[];error:string;send:(e:FormEvent<HTMLFormElement>,content:string)=>void;back:()=>void}) {
+  const [draft,setDraft]=useState('');
+  return <section className="dm-page"><header><button className="secondary" onClick={back}>← Friends</button><h1>{friend.display_name||friend.username}</h1><small>Private conversation · live updates</small></header>
+    <div className="dm-history">{messages.length===0?<p className="muted">No messages yet. Start the conversation.</p>:messages.map(message=><article className={'dm-message '+(message.sender_id===account.id?'mine':'')} key={message.id}><b>{message.sender_id===account.id?'You':friend.display_name||friend.username}</b><p>{message.content}</p><time>{new Date(message.created_at).toLocaleString()}</time></article>)}</div>
+    {error&&<p className="social-error">{error}</p>}
+    <form className="composer" onSubmit={event=>{void send(event,draft);setDraft('')}}><input value={draft} onChange={event=>setDraft(event.target.value)} maxLength={4000} placeholder={'Message '+(friend.display_name||friend.username)}/><button className="send" type="submit"><Send size={18}/></button></form>
+  </section>;
 }
 
 function AuthScreen({mode,setMode,submit,busy,error}:{mode:'login'|'register';setMode:(v:'login'|'register')=>void;submit:(e:FormEvent<HTMLFormElement>)=>void;busy:boolean;error:string}) {
