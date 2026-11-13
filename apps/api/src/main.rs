@@ -766,6 +766,13 @@ mod tests {
     }
 
     #[test]
+    fn direct_messages_reject_empty_and_oversized_content() {
+        assert!(!valid_direct_message("   "));
+        assert!(valid_direct_message("hello"));
+        assert!(!valid_direct_message(&"x".repeat(4001)));
+    }
+
+    #[test]
     fn bearer_token_requires_expected_scheme() {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, "Bearer secret-token".parse().unwrap());
