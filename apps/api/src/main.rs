@@ -731,7 +731,6 @@ async fn send_direct_message(
     Ok((StatusCode::CREATED, Json(message)))
 }
 
-
 // Persistent community/server foundation.
 #[derive(Deserialize)]
 struct CreateServerRequest {
@@ -971,14 +970,13 @@ async fn send_channel_message(
     if !valid_direct_message(&input.content) {
         return Err(error(StatusCode::BAD_REQUEST, "message_content_invalid"));
     }
-    let server_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT server_id FROM server_channels WHERE id=$1",
-    )
-    .bind(channel_id)
-    .fetch_optional(&db)
-    .await
-    .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
-    .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
+    let server_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT server_id FROM server_channels WHERE id=$1")
+            .bind(channel_id)
+            .fetch_optional(&db)
+            .await
+            .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "database_error"))?
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "channel_not_found"))?;
     require_server_member(&db, server_id, account).await?;
     let can_send = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM server_members m JOIN server_roles r ON r.id=m.role_id WHERE m.server_id=$1 AND m.account_id=$2 AND 'send_messages'=ANY(r.permissions))",
