@@ -114,7 +114,12 @@ fn valid_username(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
 }
 
-fn valid_direct_message(content: &str) -> bool {\n    let trimmed = content.trim();\n    !trimmed.is_empty() && trimmed.chars().count() <= 4000\n}\n\nfn hash_token(token: &str) -> String {
+fn valid_direct_message(content: &str) -> bool {
+    let trimmed = content.trim();
+    !trimmed.is_empty() && trimmed.chars().count() <= 4000
+}
+
+fn hash_token(token: &str) -> String {
     hex::encode(Sha256::digest(token.as_bytes()))
 }
 
